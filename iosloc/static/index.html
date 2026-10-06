@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ios-loc</title>
+<link rel="icon" href="/static/brand/ios-loc.ico" sizes="any">
+<link rel="icon" type="image/png" href="/static/brand/icon-64.png">
+<link rel="apple-touch-icon" href="/static/brand/icon-180.png">
+<meta name="theme-color" content="#0a84ff">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<div id="map" aria-label="Map"></div>
+<div class="map-veil" aria-hidden="true"></div>
+
+<button class="glass btn btn-ghost" id="reveal-panel" style="position:fixed" data-i18n="Panel">Panel</button>
+
+<!-- Top bar: device state ------------------------------------------------- -->
+<header class="glass topbar" id="topbar">
+  <div class="brand">
+    <img class="logo" src="/static/brand/icon-128.png" alt="" width="36" height="36">
+    <div class="brand-text">
+      <strong>ios-loc</strong>
+      <span class="muted" id="device-line" data-i18n="No device connected">No device connected</span>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <span class="pill" id="transport-pill" hidden></span>
+    <button class="btn btn-primary" id="connect-btn" data-i18n="Connect">Connect</button>
+    <button class="btn btn-ghost icon-only" id="phone-btn"
+            data-i18n-attr="title:Open on phone;aria-label:Open on phone">
+      <svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+    </button>
+    <button class="btn btn-ghost icon-only" id="minimize-btn"
+            data-i18n-attr="title:Minimise to tray;aria-label:Minimise to tray">
+      <svg viewBox="0 0 24 24"><path d="M5 19h14"/><path d="M12 4v10m0 0-4-4m4 4 4-4"/></svg>
+    </button>
+    <button class="btn btn-ghost icon-only" id="settings-btn"
+            data-i18n-attr="title:Settings;aria-label:Settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l1.7-1.3-1.9-3.3-2 .8a7.7 7.7 0 0 0-2.6-1.5L14.3 3h-3.8l-.3 2.2a7.7 7.7 0 0 0-2.6 1.5l-2-.8-1.9 3.3 1.7 1.3a7.7 7.7 0 0 0 0 3l-1.7 1.3 1.9 3.3 2-.8a7.7 7.7 0 0 0 2.6 1.5l.3 2.2h3.8l.3-2.2a7.7 7.7 0 0 0 2.6-1.5l2 .8 1.9-3.3Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- Control panel --------------------------------------------------------- -->
+<aside class="glass panel" id="panel">
+  <div class="panel-grip" id="panel-grip" role="button" tabindex="0"></div>
+
+  <section class="block">
+    <div class="search-row">
+      <svg class="search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16.5 16.5 4 4"/></svg>
+      <input id="search-input" type="search" autocomplete="off" spellcheck="false"
+             data-i18n-attr="placeholder:Coordinates or address">
+      <button class="btn btn-ghost btn-sm" id="search-btn" data-i18n="Search">Search</button>
+    </div>
+    <div id="search-results" class="results" hidden></div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2 data-i18n="Movement profile">Movement profile</h2>
+      <span class="muted" id="profile-note"></span>
+    </div>
+    <div class="profiles" id="profiles" role="radiogroup"></div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2 data-i18n="Speed">Speed</h2>
+      <output id="speed-value">5 km/h</output>
+    </div>
+    <input type="range" id="speed-slider" min="0" max="900" step="1" value="5"
+           data-i18n-attr="aria-label:Speed">
+    <div class="segmented" id="loop-mode" role="radiogroup">
+      <button role="radio" data-mode="once" class="on" data-i18n="One way">One way</button>
+      <button role="radio" data-mode="pingpong" data-i18n="Back and forth">Back and forth</button>
+      <button role="radio" data-mode="loop" data-i18n="Loop">Loop</button>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2 data-i18n="Route">Route</h2>
+      <span class="muted" id="route-stat" data-i18n="no points">no points</span>
+    </div>
+    <p class="hint" id="route-hint"
+       data-i18n="&lt;b&gt;Shift + click&lt;/b&gt; on the map adds a route point.&lt;br&gt;Right-click for actions. Drag a point to move it, click it to delete.">
+      <b>Shift + click</b> on the map adds a route point.<br>
+      Right-click for actions. Drag a point to move it, click it to delete.
+    </p>
+    <div id="route-actions" hidden>
+      <div class="row">
+        <button class="btn btn-ghost btn-sm" id="route-undo-btn" data-i18n="Undo point">Undo point</button>
+        <button class="btn btn-ghost btn-sm" id="route-clear-btn" data-i18n="Clear">Clear</button>
+        <button class="btn btn-ghost btn-sm" id="snap-btn" data-i18n="Snap to roads"
+                data-i18n-attr="title:Build a road route (online)">Snap to roads</button>
+      </div>
+      <div class="row">
+        <button class="btn btn-ghost btn-sm" id="route-save-btn" data-i18n="Save route">Save route</button>
+        <button class="btn btn-ghost btn-sm" id="gpx-export-btn" data-i18n="Export GPX">Export GPX</button>
+      </div>
+      <button class="btn btn-accent btn-wide" id="go-btn" disabled data-i18n="Start moving">Start moving</button>
+    </div>
+    <div class="row">
+      <label class="btn btn-ghost btn-sm file-btn">
+        <span data-i18n="Load GPX">Load GPX</span>
+        <input type="file" id="gpx-input" accept=".gpx,application/gpx+xml" hidden>
+      </label>
+      <button class="btn btn-ghost btn-sm" id="route-repeat-btn" data-i18n="Repeat last">Repeat last</button>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 data-i18n="Manual control">Manual control</h2></div>
+    <div class="dpad" id="dpad">
+      <button data-heading="315" class="diag"></button>
+      <button data-heading="0" data-i18n-attr="aria-label:Forward"><svg viewBox="0 0 24 24"><path d="M12 19V5m0 0-6 6m6-6 6 6"/></svg></button>
+      <button data-heading="45" class="diag"></button>
+      <button data-heading="270" data-i18n-attr="aria-label:Left"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0-6-6m6 6-6 6" transform="rotate(180 12 12)"/></svg></button>
+      <button id="dpad-stop" data-i18n-attr="aria-label:Stop"><span class="stop-dot"></span></button>
+      <button data-heading="90" data-i18n-attr="aria-label:Right"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0-6-6m6 6-6 6"/></svg></button>
+      <button data-heading="225" class="diag"></button>
+      <button data-heading="180" data-i18n-attr="aria-label:Back"><svg viewBox="0 0 24 24"><path d="M12 19V5m0 0-6 6m6-6 6 6" transform="rotate(180 12 12)"/></svg></button>
+      <button data-heading="135" class="diag"></button>
+    </div>
+    <p class="hint" id="keys-hint"
+       data-i18n="Hold W A S D or the arrow keys to move. Shift speeds up.&lt;br&gt;Digits 1–8 pick a profile, space pauses.">
+      Hold W A S D or the arrow keys to move. Shift speeds up.<br>
+      Digits 1–8 pick a profile, space pauses.
+    </p>
+  </section>
+
+  <section class="block">
+    <div class="row">
+      <button class="btn btn-ghost btn-sm" id="pause-btn" disabled data-i18n="Pause">Pause</button>
+      <button class="btn btn-ghost btn-sm" id="stop-btn" disabled data-i18n="Stop">Stop</button>
+    </div>
+    <button class="btn btn-danger btn-wide" id="restore-btn" disabled
+            data-i18n="Restore real location">Restore real location</button>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 data-i18n="Saved places">Saved places</h2></div>
+    <div class="row">
+      <button class="btn btn-ghost btn-sm" id="fav-add-btn" data-i18n="Save current place">Save current place</button>
+    </div>
+    <div class="favs" id="favs"></div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 data-i18n="Saved routes">Saved routes</h2></div>
+    <div class="favs" id="saved-routes"></div>
+  </section>
+</aside>
+
+<!-- HUD ------------------------------------------------------------------- -->
+<button class="glass recenter" id="recenter-btn" hidden>
+  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4"/><circle cx="12" cy="12" r="8"/><path d="M12 1.5v3m0 15v3M1.5 12h3m15 0h3"/></svg>
+  <span data-i18n="Back to device">Back to device</span>
+</button>
+
+<div class="glass hud" id="hud">
+  <div class="hud-main">
+    <div class="hud-metric">
+      <span class="hud-value" id="hud-speed">0</span>
+      <span class="hud-unit" id="hud-unit">km/h</span>
+    </div>
+    <div class="hud-compass" aria-hidden="true">
+      <svg viewBox="0 0 48 48"><g id="hud-needle"><path d="M24 7 32 36 24 30 16 36Z"/></g><circle cx="24" cy="24" r="21"/></svg>
+    </div>
+  </div>
+  <div class="hud-rows">
+    <div><span class="muted" data-i18n="Position">Position</span><b id="hud-coords">—</b></div>
+    <div><span class="muted" data-i18n="Mode">Mode</span><b id="hud-mode" data-i18n="idle">idle</b></div>
+    <div id="hud-eta-row" hidden><span class="muted" data-i18n="Remaining">Remaining</span><b id="hud-eta">—</b></div>
+  </div>
+  <div class="hud-progress" id="hud-progress" hidden><i></i></div>
+</div>
+
+<!-- Device picker --------------------------------------------------------- -->
+<div class="sheet-backdrop" id="sheet-backdrop" hidden>
+  <div class="glass sheet" role="dialog" aria-modal="true">
+    <h2 data-i18n="Devices over USB">Devices over USB</h2>
+    <div id="device-list" class="device-list"></div>
+    <label class="toggle-row compact">
+      <span>
+        <span data-i18n="Enable Developer Mode automatically">Enable Developer Mode automatically</span>
+        <small class="muted" data-i18n="The iPhone will restart">The iPhone will restart</small>
+      </span>
+      <input type="checkbox" id="devmode-toggle" class="switch">
+    </label>
+    <button class="btn btn-ghost btn-wide" id="devmode-reveal"
+            data-i18n="I don't see &quot;Developer Mode&quot; in iPhone settings">
+      I don't see "Developer Mode" in iPhone settings
+    </button>
+    <div class="row end">
+      <button class="btn btn-ghost" id="sheet-refresh" data-i18n="Refresh">Refresh</button>
+      <button class="btn btn-ghost" id="sheet-close" data-i18n="Close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings -------------------------------------------------------------- -->
+<div class="sheet-backdrop" id="settings-backdrop" hidden>
+  <div class="glass sheet" role="dialog" aria-modal="true">
+    <h2 data-i18n="Settings">Settings</h2>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="Interface language">Interface language</span>
+      <div class="segmented" id="set-lang" role="radiogroup">
+        <button role="radio" data-value="auto" data-i18n="System">System</button>
+        <button role="radio" data-value="en">English</button>
+        <button role="radio" data-value="ru">Русский</button>
+      </div>
+    </div>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="Appearance">Appearance</span>
+      <div class="segmented" id="set-theme" role="radiogroup">
+        <button role="radio" data-value="auto" data-i18n="System">System</button>
+        <button role="radio" data-value="light" data-i18n="Light">Light</button>
+        <button role="radio" data-value="dark" data-i18n="Dark">Dark</button>
+      </div>
+    </div>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="Map">Map</span>
+      <div class="segmented wrap" id="set-mapstyle" role="radiogroup">
+        <button role="radio" data-value="auto" data-i18n="Auto">Auto</button>
+        <button role="radio" data-value="osm" data-i18n="Standard">Standard</button>
+        <button role="radio" data-value="satellite" data-i18n="Satellite">Satellite</button>
+        <button role="radio" data-value="topo" data-i18n="Topographic">Topographic</button>
+        <button role="radio" data-value="vector" data-i18n="Vector">Vector</button>
+        <button role="radio" data-value="vectorLight" data-i18n="Vector light">Vector light</button>
+        <button role="radio" data-value="vectorDark" data-i18n="Vector dark">Vector dark</button>
+      </div>
+      <p class="hint" data-i18n="The first three work everywhere. Vector maps look better but need hardware acceleration (WebGL); without it the program falls back to Standard by itself.">
+        The first three work everywhere. Vector maps look better but need hardware
+        acceleration (WebGL); without it the program falls back to Standard by itself.
+      </p>
+    </div>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="Speed units">Speed units</span>
+      <div class="segmented" id="set-units" role="radiogroup">
+        <button role="radio" data-value="kmh" data-i18n="km/h">km/h</button>
+        <button role="radio" data-value="mph" data-i18n="mph">mph</button>
+        <button role="radio" data-value="ms" data-i18n="m/s">m/s</button>
+      </div>
+    </div>
+
+    <label class="toggle-row">
+      <span>
+        <span data-i18n="Follow with camera">Follow with camera</span>
+        <small class="muted" data-i18n="The map moves with the point">The map moves with the point</small>
+      </span>
+      <input type="checkbox" id="set-follow" class="switch">
+    </label>
+
+    <label class="toggle-row">
+      <span>
+        <span data-i18n="Show travelled path">Show travelled path</span>
+        <small class="muted" data-i18n="A green trail on the map">A green trail on the map</small>
+      </span>
+      <input type="checkbox" id="set-trail" class="switch">
+    </label>
+
+    <label class="toggle-row">
+      <span>
+        <span data-i18n="Keyboard control">Keyboard control</span>
+        <small class="muted" data-i18n="W A S D and arrow keys">W A S D and arrow keys</small>
+      </span>
+      <input type="checkbox" id="set-keys" class="switch">
+    </label>
+
+    <label class="toggle-row">
+      <span>
+        <span data-i18n="Tilt and rotate">Tilt and rotate</span>
+        <small class="muted" data-i18n="Right mouse button — 3D view">Right mouse button — 3D view</small>
+      </span>
+      <input type="checkbox" id="set-pitch" class="switch">
+    </label>
+
+    <label class="toggle-row">
+      <span>
+        <span data-i18n="Online services">Online services</span>
+        <small class="muted" data-i18n="Address search and road routing via OpenStreetMap and OSRM. Off means no coordinates leave this machine.">
+          Address search and road routing via OpenStreetMap and OSRM.
+          Off means no coordinates leave this machine.
+        </small>
+      </span>
+      <input type="checkbox" id="set-online" class="switch">
+    </label>
+
+    <div class="row end">
+      <button class="btn btn-ghost" id="settings-reset" data-i18n="Reset">Reset</button>
+      <button class="btn btn-primary" id="settings-close" data-i18n="Done">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Phone access ---------------------------------------------------------- -->
+<div class="sheet-backdrop" id="phone-backdrop" hidden>
+  <div class="glass sheet" role="dialog" aria-modal="true">
+    <h2 data-i18n="Open on phone">Open on phone</h2>
+    <div id="phone-body"></div>
+    <div class="row end">
+      <button class="btn btn-primary" id="phone-close" data-i18n="Close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Right-click menu on the map -------------------------------------------- -->
+<div class="glass map-menu" id="map-menu" role="menu" hidden>
+  <div class="map-menu-head" id="menu-coords"></div>
+  <button role="menuitem" id="menu-teleport" data-i18n="Move here">Move here</button>
+  <button role="menuitem" id="menu-route" data-i18n="Add to route">Add to route</button>
+  <button role="menuitem" id="menu-save" data-i18n="Save as place">Save as place</button>
+  <button role="menuitem" id="menu-copy" data-i18n="Copy coordinates">Copy coordinates</button>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

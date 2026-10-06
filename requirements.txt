@@ -1,0 +1,6 @@
+# pymobiledevice3 brings fastapi, uvicorn, gpxpy, requests and pydantic with it.
+pymobiledevice3>=11.20
+# Tray icon; Pillow comes with pymobiledevice3.
+pystray>=0.19
+# QR code for opening the panel on a phone.
+qrcode>=7.4

@@ -1,0 +1,18 @@
+# Virtual environment
+.venv/
+
+# Python artefacts
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Build output
+build/
+dist/
+release/
+
+# Editor and OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

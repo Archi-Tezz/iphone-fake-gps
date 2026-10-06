@@ -1,0 +1,587 @@
+"""Tests for the parts that must be right before a phone is ever attached.
+
+The device link is replaced by a recorder, so a full session -- connect,
+teleport, route, free roam, stop, restore -- runs end to end and every
+coordinate the tool would have pushed over USB is asserted on instead.
+
+Run: .venv\\Scripts\\python.exe -m unittest discover -s tests -v
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from iosloc import errors, session as session_module  # noqa: E402
+from iosloc.device import DeviceInfo  # noqa: E402
+from iosloc.geo import bearing, destination, distance, interpolate  # noqa: E402
+from iosloc.profiles import PROFILES, get_profile, kmh_to_ms  # noqa: E402
+from iosloc.route import LoopMode, ManualRunner, RouteRunner, Track  # noqa: E402
+from iosloc.session import LocationSession  # noqa: E402
+
+MOSCOW = (55.7558, 37.6176)
+PITER = (59.9386, 30.3141)
+
+
+class FakeLink:
+    """Stands in for `DeviceLink`, recording every fix instead of sending it."""
+
+    instances: list["FakeLink"] = []
+
+    def __init__(self, udid=None, allow_tunneld=True, enable_developer_mode=False):
+        self.udid = udid or "FAKEUDID"
+        self.transport = "userspace-tunnel"
+        self.info = DeviceInfo(
+            udid=self.udid,
+            name="iPhone 11 Pro",
+            model="iPhone 11 Pro",
+            product_type="iPhone12,3",
+            ios_version="17.5",
+            connection_type="USB",
+        )
+        self.is_open = False
+        self.sent: list[tuple[float, float]] = []
+        self.cleared = 0
+        FakeLink.instances.append(self)
+
+    async def open(self):
+        self.is_open = True
+        return self
+
+    async def close(self):
+        self.is_open = False
+
+    async def set(self, latitude, longitude):
+        self.sent.append((latitude, longitude))
+
+    async def clear(self):
+        self.cleared += 1
+
+
+class GeoTests(unittest.TestCase):
+    def test_distance_matches_known_leg(self):
+        # Moscow -> St Petersburg is ~634 km great-circle.
+        metres = distance(*MOSCOW, *PITER)
+        self.assertAlmostEqual(metres / 1000, 634, delta=3)
+
+    def test_destination_round_trips(self):
+        start = MOSCOW
+        for heading in (0, 45, 123, 270, 359):
+            end = destination(*start, heading, 5000)
+            self.assertAlmostEqual(distance(*start, *end), 5000, delta=0.5)
+            self.assertAlmostEqual(bearing(*start, *end), heading, delta=0.01)
+
+    def test_interpolate_midpoint_is_half_way(self):
+        middle = interpolate(*MOSCOW, *PITER, 0.5)
+        self.assertAlmostEqual(distance(*MOSCOW, *middle), distance(*middle, *PITER), delta=1.0)
+
+    def test_antimeridian_longitude_stays_in_range(self):
+        _, longitude = destination(0.0, 179.9, 90.0, 50_000)
+        self.assertTrue(-180.0 <= longitude <= 180.0)
+
+
+class TrackTests(unittest.TestCase):
+    def test_length_is_sum_of_legs(self):
+        track = Track([(55.75, 37.61), (55.76, 37.62), (55.77, 37.63)])
+        expected = distance(55.75, 37.61, 55.76, 37.62) + distance(55.76, 37.62, 55.77, 37.63)
+        self.assertAlmostEqual(track.length, expected, delta=0.01)
+
+    def test_duplicate_points_are_dropped(self):
+        track = Track([(55.75, 37.61), (55.75, 37.61), (55.76, 37.62)])
+        self.assertEqual(len(track), 2)
+
+    def test_single_point_track_is_degenerate(self):
+        track = Track([(55.75, 37.61)])
+        self.assertTrue(track.is_degenerate)
+        self.assertEqual(track.length, 0.0)
+
+    def test_empty_track_rejected(self):
+        with self.assertRaises(ValueError):
+            Track([])
+
+    def test_position_at_ends_is_exact(self):
+        track = Track([(55.75, 37.61), (55.77, 37.63)])
+        start = track.position_at(0.0)
+        end = track.position_at(track.length)
+        self.assertAlmostEqual(distance(start.latitude, start.longitude, 55.75, 37.61), 0, delta=0.01)
+        self.assertAlmostEqual(distance(end.latitude, end.longitude, 55.77, 37.63), 0, delta=0.01)
+
+    def test_position_clamps_past_the_end(self):
+        track = Track([(55.75, 37.61), (55.77, 37.63)])
+        beyond = track.position_at(track.length * 10)
+        self.assertAlmostEqual(distance(beyond.latitude, beyond.longitude, 55.77, 37.63), 0, delta=0.01)
+
+    def test_invalid_coordinate_rejected(self):
+        with self.assertRaises(ValueError):
+            Track([(91.0, 0.0)])
+
+
+class RouteRunnerTests(unittest.TestCase):
+    def _run(self, runner, dt=1.0, limit=100_000):
+        ticks = 0
+        while not runner.finished and ticks < limit:
+            runner.advance(dt)
+            ticks += 1
+        return ticks
+
+    def test_once_finishes_at_the_last_point(self):
+        track = Track([(55.75, 37.61), (55.76, 37.62)])
+        runner = RouteRunner(track=track, speed=5.0, accel=1.0, mode=LoopMode.ONCE)
+        self._run(runner)
+        self.assertTrue(runner.finished)
+        fix = runner.current()
+        self.assertAlmostEqual(distance(fix.latitude, fix.longitude, 55.76, 37.62), 0, delta=0.5)
+
+    def test_speed_ramps_up_and_brakes_to_a_stop(self):
+        track = Track([(55.75, 37.61), (55.80, 37.61)])
+        runner = RouteRunner(track=track, speed=20.0, accel=1.5, mode=LoopMode.ONCE)
+        speeds = []
+        while not runner.finished:
+            speeds.append(runner.advance(1.0).speed)
+        self.assertLess(speeds[0], 20.0, "first tick should still be accelerating")
+        self.assertAlmostEqual(max(speeds), 20.0, delta=0.6)
+        # The braking ramp means the fixes before the end are slower than cruise.
+        self.assertLess(speeds[-2], 20.0)
+
+    def test_zero_accel_starts_at_cruise(self):
+        track = Track([(55.75, 37.61), (55.80, 37.61)])
+        runner = RouteRunner(track=track, speed=12.0, accel=0.0)
+        self.assertAlmostEqual(runner.advance(1.0).speed, 12.0, delta=0.01)
+
+    def test_loop_wraps_without_finishing(self):
+        track = Track([(55.75, 37.61), (55.7505, 37.61)])
+        runner = RouteRunner(track=track, speed=30.0, accel=0.0, mode=LoopMode.LOOP)
+        for _ in range(200):
+            runner.advance(1.0)
+        self.assertFalse(runner.finished)
+        self.assertLessEqual(runner.travelled, track.length)
+
+    def test_pingpong_reverses_direction(self):
+        track = Track([(55.75, 37.61), (55.7505, 37.61)])
+        runner = RouteRunner(track=track, speed=20.0, accel=0.0, mode=LoopMode.PINGPONG)
+        seen_reverse = False
+        for _ in range(300):
+            runner.advance(1.0)
+            if runner.direction < 0:
+                seen_reverse = True
+            self.assertTrue(0.0 <= runner.travelled <= track.length + 1e-6)
+        self.assertTrue(seen_reverse)
+        self.assertFalse(runner.finished)
+
+    def test_jitter_stays_inside_its_radius(self):
+        track = Track([(55.75, 37.61), (55.80, 37.61)])
+        runner = RouteRunner(track=track, speed=10.0, accel=0.0, jitter_m=8.0)
+        for _ in range(200):
+            clean = runner.track.position_at(runner.travelled)
+            fix = runner.advance(1.0)
+            offset = distance(clean.latitude, clean.longitude, fix.latitude, fix.longitude)
+            # advance() moves first, so compare against a one-step window.
+            self.assertLess(offset, 8.0 + runner.speed + 1.0)
+
+    def test_eta_matches_distance_over_speed(self):
+        track = Track([(55.75, 37.61), (55.80, 37.61)])
+        runner = RouteRunner(track=track, speed=10.0, mode=LoopMode.ONCE)
+        self.assertAlmostEqual(runner.eta, track.length / 10.0, delta=0.01)
+
+    def test_degenerate_track_finishes_immediately(self):
+        runner = RouteRunner(track=Track([(55.75, 37.61)]), speed=5.0)
+        fix = runner.advance(1.0)
+        self.assertTrue(runner.finished)
+        self.assertAlmostEqual(fix.latitude, 55.75, places=6)
+
+
+class ManualRunnerTests(unittest.TestCase):
+    def test_turn_rate_limits_heading_change(self):
+        runner = ManualRunner(latitude=55.75, longitude=37.61, heading=0.0, turn_rate=45.0)
+        runner.steer(heading=180.0, speed=5.0)
+        self.assertAlmostEqual(runner.advance(1.0).heading, 45.0, delta=0.01)
+        self.assertAlmostEqual(runner.advance(1.0).heading, 90.0, delta=0.01)
+
+    def test_turn_takes_the_short_way_round(self):
+        runner = ManualRunner(latitude=55.75, longitude=37.61, heading=10.0, turn_rate=20.0)
+        runner.steer(heading=350.0)
+        self.assertAlmostEqual(runner.advance(1.0).heading, 350.0, delta=0.01)
+
+    def test_moves_along_its_heading(self):
+        runner = ManualRunner(latitude=55.75, longitude=37.61, heading=90.0, speed=10.0, accel=0.0)
+        start = (runner.latitude, runner.longitude)
+        fix = runner.advance(10.0)
+        self.assertAlmostEqual(distance(*start, fix.latitude, fix.longitude), 100.0, delta=1.0)
+        self.assertAlmostEqual(bearing(*start, fix.latitude, fix.longitude), 90.0, delta=0.5)
+
+    def test_zero_speed_holds_position(self):
+        runner = ManualRunner(latitude=55.75, longitude=37.61, speed=0.0, jitter_m=0.0)
+        fix = runner.advance(60.0)
+        self.assertEqual((fix.latitude, fix.longitude), (55.75, 37.61))
+
+
+class ProfileTests(unittest.TestCase):
+    def test_every_profile_is_coherent(self):
+        for key, profile in PROFILES.items():
+            self.assertEqual(profile.key, key)
+            self.assertGreaterEqual(profile.speed, 0.0)
+            self.assertGreater(profile.interval, 0.0)
+            self.assertGreaterEqual(profile.jitter_m, 0.0)
+            self.assertTrue(0.0 <= profile.speed_jitter < 1.0)
+
+    def test_unknown_profile_rejected(self):
+        with self.assertRaises(ValueError):
+            get_profile("teleporter")
+
+    def test_plane_is_the_fastest_profile(self):
+        self.assertEqual(max(PROFILES.values(), key=lambda p: p.speed).key, "plane")
+
+
+class SessionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        FakeLink.instances.clear()
+        self._real_link = session_module.DeviceLink
+        session_module.DeviceLink = FakeLink
+        self.session = LocationSession()
+        await self.session.connect()
+        self.link = FakeLink.instances[-1]
+
+    async def asyncTearDown(self):
+        await self.session.disconnect(restore=True)
+        session_module.DeviceLink = self._real_link
+
+    async def test_connect_reports_the_device(self):
+        self.assertTrue(self.session.connected)
+        self.assertEqual(self.session.device.name, "iPhone 11 Pro")
+        self.assertEqual(self.session.state()["transport"], "userspace-tunnel")
+
+    async def test_teleport_sends_the_exact_point(self):
+        await self.session.teleport(55.7539, 37.6208, profile="stand")
+        self.assertEqual(self.link.sent[0], (55.7539, 37.6208))
+        position = self.session.state()["position"]
+        self.assertAlmostEqual(position["lat"], 55.7539, places=4)
+
+    async def test_route_pushes_a_moving_sequence(self):
+        await self.session.follow(
+            points=[(55.7558, 37.6176), (55.7600, 37.6176)],
+            profile="city",
+            from_current=False,
+        )
+        await asyncio.sleep(3.2)
+        await self.session.stop()
+        self.assertGreaterEqual(len(self.link.sent), 2)
+        first, last = self.link.sent[0], self.link.sent[-1]
+        self.assertGreater(distance(*first, *last), 5.0, "the device should have moved")
+
+    async def test_route_state_reports_progress_and_eta(self):
+        await self.session.follow(
+            points=[(55.7558, 37.6176), (55.8000, 37.6176)],
+            profile="highway",
+            from_current=False,
+        )
+        await asyncio.sleep(1.5)
+        route = self.session.state()["route"]
+        self.assertIsNotNone(route)
+        self.assertGreater(route["length_m"], 4000)
+        self.assertIsNotNone(route["eta_s"])
+        await self.session.stop()
+
+    async def test_stop_without_restore_holds_the_last_point(self):
+        await self.session.teleport(55.75, 37.61)
+        await self.session.stop(restore=False)
+        self.assertEqual(self.link.cleared, 0)
+        self.assertTrue(self.session.state()["override_active"])
+
+    async def test_restore_clears_the_override(self):
+        await self.session.teleport(55.75, 37.61)
+        await self.session.stop(restore=True)
+        self.assertEqual(self.link.cleared, 1)
+        self.assertFalse(self.session.state()["override_active"])
+        self.assertIsNone(self.session.state()["position"])
+
+    async def test_disconnect_always_restores(self):
+        await self.session.teleport(55.75, 37.61)
+        await self.session.disconnect(restore=True)
+        self.assertEqual(self.link.cleared, 1)
+        self.assertFalse(self.session.connected)
+        # asyncTearDown disconnects again; that must stay harmless.
+        await self.session.connect()
+        self.link = FakeLink.instances[-1]
+
+    async def test_steering_moves_in_the_requested_direction(self):
+        await self.session.teleport(55.75, 37.61, profile="city")
+        await self.session.steer(heading=90.0, speed_kmh=120.0, snap_heading=True)
+        # "city" accelerates at 2.2 m/s^2, so the first seconds are deliberately
+        # slow -- give the ramp time rather than asserting an instant jump.
+        await asyncio.sleep(4.5)
+        await self.session.stop()
+        start, end = self.link.sent[0], self.link.sent[-1]
+        self.assertGreater(distance(*start, *end), 10.0)
+        self.assertAlmostEqual(bearing(*start, *end), 90.0, delta=25.0)
+
+    async def test_pause_freezes_the_position(self):
+        await self.session.follow(
+            points=[(55.7558, 37.6176), (55.8000, 37.6176)],
+            profile="highway",
+            from_current=False,
+        )
+        await asyncio.sleep(1.2)
+        await self.session.pause()
+        frozen = len(self.link.sent)
+        await asyncio.sleep(1.6)
+        self.assertEqual(len(self.link.sent), frozen, "a paused session must not send fixes")
+        await self.session.resume()
+        await asyncio.sleep(1.4)
+        self.assertGreater(len(self.link.sent), frozen)
+        await self.session.stop()
+
+    async def test_unchanged_position_is_not_resent_every_tick(self):
+        await self.session.teleport(55.75, 37.61, profile="stand")
+        sent_at_start = len(self.link.sent)
+        await asyncio.sleep(2.5)
+        # "stand" jitters by 2.5 m, which is above the resend threshold, so a
+        # few fixes are expected -- just not one per tick of a 2 s interval.
+        self.assertLessEqual(len(self.link.sent) - sent_at_start, 3)
+
+    async def test_profile_switch_retunes_a_running_route(self):
+        await self.session.follow(
+            points=[(55.7558, 37.6176), (55.9000, 37.6176)],
+            profile="walk",
+            from_current=False,
+        )
+        await self.session.set_profile("plane")
+        route = self.session.state()["route"]
+        self.assertAlmostEqual(route["target_speed_kmh"], 900.0, delta=1.0)
+        await self.session.stop()
+
+    async def test_commands_need_a_connection(self):
+        await self.session.disconnect(restore=False)
+        with self.assertRaises(errors.NotConnectedError):
+            await self.session.teleport(55.75, 37.61)
+        await self.session.connect()
+        self.link = FakeLink.instances[-1]
+
+    async def test_bad_coordinates_rejected_before_any_send(self):
+        with self.assertRaises(ValueError):
+            await self.session.teleport(1000.0, 37.61)
+        self.assertEqual(self.link.sent, [])
+
+    async def test_route_needs_at_least_one_point(self):
+        with self.assertRaises(ValueError):
+            await self.session.follow(points=[], from_current=False)
+
+
+class ServerShapeTests(unittest.TestCase):
+    """The API surface the UI depends on must exist and stay loopback-only."""
+
+    def test_expected_routes_are_registered(self):
+        from iosloc.server import app
+
+        paths = {route.path for route in app.routes}
+        for path in (
+            "/api/state", "/api/profiles", "/api/devices", "/api/connect",
+            "/api/disconnect", "/api/teleport", "/api/route", "/api/steer",
+            "/api/profile", "/api/speed", "/api/pause", "/api/resume",
+            "/api/stop", "/api/search", "/api/snap", "/api/minimize",
+            "/api/reveal-devmode", "/",
+        ):
+            self.assertIn(path, paths, f"missing route {path}")
+
+    def test_static_assets_are_present(self):
+        from iosloc.server import STATIC_DIR
+
+        for name in (
+            "index.html", "app.css", "app.js",
+            # Both map engines ship: raster works everywhere, vector needs WebGL.
+            "vendor/leaflet.js", "vendor/leaflet.css",
+            "vendor/maplibre-gl.js", "vendor/maplibre-gl.css",
+            "map-styles/liberty.json", "map-styles/positron.json", "map-styles/dark.json",
+            "brand/ios-loc.ico", "brand/icon-1024.png", "brand/icon-128.png",
+        ):
+            self.assertTrue((STATIC_DIR / name).is_file(), f"missing {name}")
+
+    def test_every_vector_style_in_the_ui_is_shipped(self):
+        """Each vector choice in the settings panel needs its style file."""
+        import re
+
+        from iosloc.server import STATIC_DIR
+
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        offered = set(re.findall(r'id="set-mapstyle".*?</div>', html, re.S)[0:1] and
+                      re.findall(r'data-value="(\w+)"',
+                                 re.findall(r'id="set-mapstyle".*?</div>', html, re.S)[0]))
+        self.assertIn("osm", offered, "the always-works raster map must be offered")
+        for style in re.findall(r'style: "/static/(map-styles/[\w.-]+)"', app_js):
+            self.assertTrue((STATIC_DIR / style).is_file(), f"missing {style}")
+
+    def test_windows_icon_carries_every_size(self):
+        """The .ico must hold each size Explorer and the taskbar ask for."""
+        from PIL import Image
+
+        from iosloc.server import STATIC_DIR
+
+        with Image.open(STATIC_DIR / "brand" / "ios-loc.ico") as icon:
+            sizes = {size[0] for size in icon.info.get("sizes", set())}
+        for expected in (16, 32, 48, 256):
+            self.assertIn(expected, sizes, f"icon is missing the {expected}px variant")
+
+    def test_serve_defaults_to_loopback(self):
+        """Without --lan the panel must stay unreachable from the network."""
+        import inspect
+
+        from iosloc.server import serve
+
+        source = inspect.getsource(serve)
+        self.assertIn('host = "127.0.0.1"', source)
+        # The only place that widens the binding is the LAN branch, and it must
+        # mint a token in the same breath.
+        lan_branch = source.split("if lan:", 1)[1]
+        self.assertIn('host = "0.0.0.0"', lan_branch)
+        self.assertIn("generate_token()", lan_branch)
+
+
+class AccessTests(unittest.TestCase):
+    """LAN mode exposes device control to the network, so the gate must hold."""
+
+    def test_tokens_are_random_and_long_enough(self):
+        from iosloc.access import TOKEN_ALPHABET, TOKEN_LENGTH, generate_token
+
+        tokens = {generate_token() for _ in range(200)}
+        self.assertEqual(len(tokens), 200, "tokens must not repeat")
+        for token in list(tokens)[:20]:
+            self.assertEqual(len(token), TOKEN_LENGTH)
+            self.assertTrue(set(token) <= set(TOKEN_ALPHABET))
+
+    def test_local_addresses_exclude_loopback(self):
+        import ipaddress
+
+        from iosloc.access import local_addresses
+
+        for address in local_addresses():
+            parsed = ipaddress.IPv4Address(address)
+            self.assertFalse(parsed.is_loopback, f"{address} is loopback")
+            self.assertFalse(parsed.is_link_local, f"{address} is link-local")
+
+    def test_home_wifi_addresses_are_offered_first(self):
+        """A VPN or Hyper-V address must not outrank the real Wi-Fi one."""
+        from iosloc.access import _address_rank
+
+        ordered = sorted(["10.0.0.1", "172.20.0.1", "192.168.1.50"], key=_address_rank)
+        self.assertEqual(ordered[0], "192.168.1.50")
+
+    def test_token_is_required_once_lan_mode_is_on(self):
+        from iosloc import server
+
+        self.assertIsNone(server.access_token, "loopback mode must need no token")
+        source = __import__("inspect").getsource(server.require_token)
+        self.assertIn("compare_digest", source, "the token must be compared in constant time")
+        self.assertIn("401", source)
+
+    def test_qr_encodes_the_url(self):
+        from iosloc.access import qr_png
+
+        png = qr_png("http://192.168.1.50:8723/?k=test")
+        self.assertIsNotNone(png)
+        self.assertTrue(png.startswith(bytes([0x89]) + b"PNG"), "should be a PNG")
+
+
+class TrayTests(unittest.TestCase):
+    """The tray is a convenience; it must never be able to break the panel."""
+
+    def test_console_helpers_never_raise(self):
+        from iosloc import tray
+
+        # On a machine with no console these return False rather than throwing.
+        self.assertIsInstance(tray.console_window_available(), bool)
+        self.assertIsInstance(tray.hide_console(), bool)
+        self.assertIsInstance(tray.show_console(), bool)
+
+    def test_tray_icon_image_is_shipped(self):
+        from iosloc import tray
+
+        self.assertTrue(tray.ICON_PATH.is_file(), "the tray icon image is missing")
+
+    def test_start_tray_survives_a_missing_backend(self):
+        """With pystray unimportable, start_tray returns None instead of raising."""
+        import builtins
+
+        from iosloc import tray
+
+        real_import = builtins.__import__
+
+        def refuse_pystray(name, *args, **kwargs):
+            if name == "pystray":
+                raise ImportError("simulated: no tray backend")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = refuse_pystray
+        try:
+            result = tray.start_tray("http://127.0.0.1:8723/", lambda: None, lambda: None)
+        finally:
+            builtins.__import__ = real_import
+        self.assertIsNone(result)
+
+
+class DoctorTests(unittest.TestCase):
+    def test_every_required_module_imports(self):
+        """The same checklist the frozen build is verified against."""
+        import importlib
+
+        from iosloc.cli import REQUIRED_MODULES
+
+        self.assertGreaterEqual(len(REQUIRED_MODULES), 5)
+        for name, purpose in REQUIRED_MODULES:
+            with self.subTest(module=name):
+                importlib.import_module(name)
+                self.assertTrue(purpose, "each module needs a human-readable purpose")
+
+
+class PortHandlingTests(unittest.TestCase):
+    """A busy port must never end in a window that closes without a word."""
+
+    def _busy_port(self):
+        """Bind a port and keep it, like an unrelated program would."""
+        import socket
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        return listener.getsockname()[1]
+
+    def test_busy_port_is_detected(self):
+        from iosloc.server import _port_is_free
+
+        self.assertFalse(_port_is_free(self._busy_port()))
+
+    def test_free_port_is_detected(self):
+        import socket
+
+        from iosloc.server import _port_is_free
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        self.assertTrue(_port_is_free(port))
+
+    def test_foreign_listener_is_not_mistaken_for_a_panel(self):
+        from iosloc.server import _panel_already_running
+
+        self.assertFalse(_panel_already_running(self._busy_port()))
+
+    def test_explicit_busy_port_fails_loudly_instead_of_serving(self):
+        from iosloc import server
+
+        port = self._busy_port()
+        called = []
+        original = server.webbrowser.open
+        server.webbrowser.open = lambda url: called.append(url)
+        self.addCleanup(lambda: setattr(server.webbrowser, "open", original))
+
+        self.assertEqual(server.serve(port=port, open_browser=False), 1)
+        self.assertEqual(called, [], "nothing should have been opened")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

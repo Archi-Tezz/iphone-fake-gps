@@ -1,0 +1,22 @@
+[
+  {
+    "key": "liberty",
+    "label": "Подробная",
+    "layers": 111
+  },
+  {
+    "key": "positron",
+    "label": "Светлая минимал",
+    "layers": 55
+  },
+  {
+    "key": "dark",
+    "label": "Тёмная",
+    "layers": 280
+  },
+  {
+    "key": "graybeard",
+    "label": "Тёмная минимал",
+    "layers": 280
+  }
+]
