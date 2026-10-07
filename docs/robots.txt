@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://archi-tezz.github.io/iphone-fake-gps/sitemap.xml

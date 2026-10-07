@@ -9,7 +9,7 @@
 Set any location, or travel a route at a believable pace. Built on Apple's own
 developer services — no jailbreak, no patching, no configuration profiles.
 
-<sub>The program and its command are called `ios-loc`.</sub>
+<sub>The program and its command are called `ios-loc`. · [Русская версия](README.ru.md) · [Project site](https://archi-tezz.github.io/iphone-fake-gps/)</sub>
 
 ![panel](docs/screenshots/panel-dark.jpg)
 
