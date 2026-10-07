@@ -2,11 +2,14 @@
 
 <img src="iosloc/static/brand/icon-256.png" width="128" alt="ios-loc">
 
-# ios-loc
+# iphone-fake-gps
 
-**Override an iPhone's location from Windows — over the cable, with a map.**
+**Fake GPS for iPhone, driven from Windows over the cable.**
 
-Built on Apple's own developer services. No jailbreak, no patching, no profiles.
+Set any location, or travel a route at a believable pace. Built on Apple's own
+developer services — no jailbreak, no patching, no configuration profiles.
+
+<sub>The program and its command are called `ios-loc`.</sub>
 
 ![panel](docs/screenshots/panel-dark.jpg)
 
