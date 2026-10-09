@@ -484,6 +484,15 @@ class LocationSession:
             "paused": self._paused,
             "profile": self._profile.as_dict(),
             "fixes_sent": self._fixes_sent,
+            # How long ago the device last accepted a fix. The question behind
+            # it is "is this actually reaching the phone right now?", and a
+            # counter alone cannot answer that -- a stalled stream keeps its
+            # count. None means nothing has been sent since connecting.
+            "last_fix_age": (
+                round(time.monotonic() - self._last_sent_at, 1)
+                if self._last_sent_at
+                else None
+            ),
             "reconnecting": self._reconnecting,
             "error": self._error,
             "position": None,

@@ -154,6 +154,15 @@ Moscow → Dubai route becomes *drive to VVO → fly VVO → SVO → fly SVO →
 not a six-thousand-kilometre drive. Neighbouring airports are driven between
 rather than flown.
 
+### Checking that it works
+
+The panel can only show what it sends; what the iPhone believes is only visible
+on the iPhone. The tick icon in the top right puts both halves on one screen:
+device, channel, whether the override is on, how many fixes the device has
+accepted and how long ago the last one was — a counter alone cannot tell a live
+stream from a stalled one — and the exact point to look for. Under it, the three
+steps to confirm it on the phone: Maps, the locate arrow, the blue dot.
+
 ### Knowing it is running
 
 Started by double-click, a program like this is a console window that prints a

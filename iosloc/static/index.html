@@ -45,6 +45,10 @@
             data-i18n-attr="title:Minimise to tray;aria-label:Minimise to tray">
       <svg viewBox="0 0 24 24"><path d="M5 19h14"/><path d="M12 4v10m0 0-4-4m4 4 4-4"/></svg>
     </button>
+    <button class="btn btn-ghost icon-only" id="verify-btn"
+            data-i18n-attr="title:Check it is working;aria-label:Check it is working">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg>
+    </button>
     <button class="btn btn-ghost icon-only" id="log-btn"
             data-i18n-attr="title:Activity log;aria-label:Activity log">
       <svg viewBox="0 0 24 24"><path d="M5 4.5h14v15H5z"/><path d="M8 9h8M8 12.5h8M8 16h5"/></svg>
@@ -371,6 +375,46 @@
 
     <div class="row end">
       <button class="btn btn-primary" id="presets-close" data-i18n="Close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Is it actually working? ------------------------------------------------ -->
+<div class="sheet-backdrop" id="verify-backdrop" hidden>
+  <div class="glass sheet" role="dialog" aria-modal="true">
+    <h2 data-i18n="Check it is working">Check it is working</h2>
+    <p class="hint" data-i18n="The panel can only show what it sends. What the iPhone believes has to be read on the iPhone — these two halves together are the proof.">
+      The panel can only show what it sends. What the iPhone believes has to be
+      read on the iPhone &mdash; these two halves together are the proof.
+    </p>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="From this side">From this side</span>
+      <div class="verify-rows" id="verify-rows"></div>
+    </div>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="On the iPhone">On the iPhone</span>
+      <ol class="verify-steps">
+        <li data-i18n="Open Maps (Apple's own) and press the locate arrow.">Open Maps (Apple&rsquo;s own) and press the locate arrow.</li>
+        <li data-i18n="The blue dot should be at the point below, not where you are.">The blue dot should be at the point below, not where you are.</li>
+        <li data-i18n="Still unsure? Open the Weather app — it names the city of the overridden point.">Still unsure? Open the Weather app &mdash; it names the city of the overridden point.</li>
+      </ol>
+      <p class="verify-point" id="verify-point"></p>
+      <p class="hint" data-i18n="Maps caches the old dot for a few seconds. Swipe the map once and press the arrow again.">
+        Maps caches the old dot for a few seconds. Swipe the map once and press
+        the arrow again.
+      </p>
+    </div>
+
+    <p class="hint" data-i18n="Apps that share live location with other people (Blink, Life360 and the like) can see that a position was simulated and will ignore it. That is deliberate on Apple's side and not a fault here.">
+      Apps that share live location with other people (Blink, Life360 and the
+      like) can see that a position was simulated and will ignore it. That is
+      deliberate on Apple&rsquo;s side and not a fault here.
+    </p>
+
+    <div class="row end">
+      <button class="btn btn-primary" id="verify-close" data-i18n="Close">Close</button>
     </div>
   </div>
 </div>

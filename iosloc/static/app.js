@@ -1089,6 +1089,7 @@ function showSpeed(kmh) {
 
 function applyState(server) {
   state.server = server;
+  if (!$("verify-backdrop").hidden) renderVerify();
   const device = server.device;
 
   $("device-line").textContent = device
@@ -1653,6 +1654,70 @@ function repeatLastRoute() {
     return;
   }
   loadSavedRoute({ ...state.lastRoute, name: t("Repeat last") });
+}
+
+// ----------------------------------------------------------------- verifying
+
+let verifyTimer = null;
+
+/** Show, live, whether fixes are actually reaching the device. */
+function openVerify() {
+  $("verify-backdrop").hidden = false;
+  renderVerify();
+  if (verifyTimer) clearInterval(verifyTimer);
+  verifyTimer = setInterval(renderVerify, 1000);
+}
+
+function closeVerify() {
+  $("verify-backdrop").hidden = true;
+  if (verifyTimer) { clearInterval(verifyTimer); verifyTimer = null; }
+}
+
+function verifyRow(key, value, tone) {
+  return `<span class="k">${escapeHtml(key)}</span>`
+    + `<span class="v ${tone || ""}">${escapeHtml(value)}</span>`;
+}
+
+function renderVerify() {
+  const server = state.server;
+  const box = $("verify-rows");
+  if (!server) {
+    box.innerHTML = verifyRow(t("Connection"), t("no answer"), "bad");
+    return;
+  }
+
+  const rows = [];
+  rows.push(server.connected
+    ? verifyRow(t("Device"), server.device ? server.device.name : t("connected"), "good")
+    : verifyRow(t("Device"), t("not connected"), "bad"));
+
+  if (server.connected) {
+    rows.push(verifyRow(t("Channel"), server.transport || "lockdown", "good"));
+  }
+
+  rows.push(server.override_active
+    ? verifyRow(t("Override"), t("on"), "good")
+    : verifyRow(t("Override"), t("off — place a point on the map"), "wait"));
+
+  rows.push(verifyRow(t("Fixes accepted"), String(server.fixes_sent || 0),
+    server.fixes_sent ? "good" : "wait"));
+
+  // The counter alone cannot tell a live stream from a stalled one; the age can.
+  const age = server.last_fix_age;
+  if (age === null || age === undefined) {
+    rows.push(verifyRow(t("Last fix"), t("none yet"), "wait"));
+  } else if (age <= 25) {
+    rows.push(verifyRow(t("Last fix"), t("{n} s ago", { n: age.toFixed(1) }), "good"));
+  } else {
+    rows.push(verifyRow(t("Last fix"), t("{n} s ago", { n: age.toFixed(0) }), "bad"));
+  }
+
+  box.innerHTML = rows.join("");
+
+  const position = server.position;
+  $("verify-point").textContent = position
+    ? `${position.lat.toFixed(5)}, ${position.lon.toFixed(5)}`
+    : t("— no point set yet");
 }
 
 // ------------------------------------------------------------- activity log
@@ -2283,6 +2348,12 @@ function wire() {
   $("phone-backdrop").addEventListener("click", (event) => {
     if (event.target === $("phone-backdrop")) $("phone-backdrop").hidden = true;
   });
+  $("verify-btn").addEventListener("click", openVerify);
+  $("verify-close").addEventListener("click", closeVerify);
+  $("verify-backdrop").addEventListener("click", (event) => {
+    if (event.target === $("verify-backdrop")) closeVerify();
+  });
+
   $("log-btn").addEventListener("click", openLog);
   $("log-close").addEventListener("click", closeLog);
   $("log-copy").addEventListener("click", copyLog);
@@ -2350,6 +2421,7 @@ function wire() {
     $("sheet-backdrop").hidden = true;
     $("presets-backdrop").hidden = true;
     closeLog();
+    closeVerify();
   });
 }
 

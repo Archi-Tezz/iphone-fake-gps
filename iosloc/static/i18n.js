@@ -166,6 +166,35 @@ const RU = {
     "Куда хотите попасть? Город, код аэропорта или координаты. Маршрут проложится сам: доехать до аэропорта, перелёт, дальше по земле.",
   "Start the journey": "Отправиться",
   "Activity log": "Журнал работы",
+  "Check it is working": "Проверка подмены",
+  "The panel can only show what it sends. What the iPhone believes has to be read on the iPhone — these two halves together are the proof.":
+    "Панель знает только то, что она отправляет. Чему верит iPhone — видно только на iPhone. Доказательство — эти две половины вместе.",
+  "From this side": "С этой стороны",
+  "On the iPhone": "На iPhone",
+  "Open Maps (Apple's own) and press the locate arrow.":
+    "Откройте «Карты» (родные, Apple) и нажмите стрелку геопозиции.",
+  "The blue dot should be at the point below, not where you are.":
+    "Синяя точка должна оказаться в точке ниже, а не там, где вы.",
+  "Still unsure? Open the Weather app — it names the city of the overridden point.":
+    "Сомневаетесь? Откройте «Погоду» — она назовёт город подменённой точки.",
+  "Maps caches the old dot for a few seconds. Swipe the map once and press the arrow again.":
+    "Карты пару секунд держат старую точку. Проведите по карте и нажмите стрелку ещё раз.",
+  "Apps that share live location with other people (Blink, Life360 and the like) can see that a position was simulated and will ignore it. That is deliberate on Apple's side and not a fault here.":
+    "Приложения, где геопозиция видна другим людям (Blink, Life360 и подобные), видят пометку системы о том, что точка симулирована, и игнорируют её. Это сделано со стороны Apple, а не ошибка программы.",
+  "Connection": "Связь",
+  "no answer": "нет ответа",
+  "Device": "Устройство",
+  "connected": "подключено",
+  "not connected": "не подключено",
+  "Channel": "Канал",
+  "Override": "Подмена",
+  "on": "включена",
+  "off — place a point on the map": "выключена — поставьте точку на карте",
+  "Fixes accepted": "Принято координат",
+  "Last fix": "Последняя",
+  "none yet": "пока нет",
+  "{n} s ago": "{n} с назад",
+  "— no point set yet": "— точка ещё не задана",
   "Everything the program does, newest at the bottom. If this panel answers, the program is running.":
     "Всё, что делает программа, свежее — снизу. Если это окно отвечает, значит программа работает.",
   "Running": "Работает",

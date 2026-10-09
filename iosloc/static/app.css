@@ -1058,3 +1058,34 @@ body.panel-hidden #reveal-panel { display: block; }
 
 .log-line-warn { color: #ffd60a; }
 .log-line-err { color: #ff6961; font-weight: 600; }
+
+/* "Is it working?" -----------------------------------------------------------
+   Two halves of one answer: what this side sends, and what the phone shows. */
+.verify-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.verify-rows .k { color: var(--muted, rgba(235, 235, 245, 0.6)); }
+.verify-rows .v { font-weight: 600; text-align: right; }
+.verify-rows .v.good { color: #30d158; }
+.verify-rows .v.bad { color: #ff6961; }
+.verify-rows .v.wait { color: #ffd60a; }
+
+.verify-steps {
+  margin: 6px 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.verify-steps li { margin-bottom: 3px; }
+
+.verify-point {
+  margin: 4px 0 2px;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+}

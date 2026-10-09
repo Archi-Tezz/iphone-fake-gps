@@ -784,6 +784,27 @@ class ServerShapeTests(unittest.TestCase):
         self.assertIn("generate_token()", lan_branch)
 
 
+class VerifyStateTests(unittest.TestCase):
+    """The panel's proof that fixes are reaching the device."""
+
+    def test_age_is_none_before_anything_is_sent(self):
+        session = LocationSession()
+        state = session.state()
+        self.assertIsNone(state["last_fix_age"])
+        self.assertEqual(state["fixes_sent"], 0)
+
+    def test_age_tracks_the_last_accepted_fix(self):
+        import time
+
+        session = LocationSession()
+        # A fix that was accepted a minute ago must read as a minute old: a
+        # stalled stream keeps its counter, so only the age gives it away.
+        session._last_sent_at = time.monotonic() - 60.0
+        state = session.state()
+        self.assertIsNotNone(state["last_fix_age"])
+        self.assertGreaterEqual(state["last_fix_age"], 59.0)
+
+
 class ConsoleTests(unittest.TestCase):
     """The window has to say that it is running, whatever the terminal is."""
 
