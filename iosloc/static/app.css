@@ -461,6 +461,26 @@ input[type="range"]::-moz-range-thumb {
 .segmented.wrap { flex-wrap: wrap; }
 .segmented.wrap button { flex: 1 1 30%; min-width: 86px; }
 
+
+/* ------------------------------------------------------------- journey */
+
+.leg {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 4px;
+  background: var(--fill);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  font-size: 13.5px;
+}
+
+.leg-note { font-weight: 560; }
+.leg-meta { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }
+.journey-total { margin: 8px 0 12px; font-size: 13px; }
+
 /* ---------------------------------------------------------------- toggles */
 
 .toggle-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; cursor: pointer; }

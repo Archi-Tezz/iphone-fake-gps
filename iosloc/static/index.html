@@ -114,6 +114,25 @@
   </section>
 
   <section class="block">
+    <div class="block-head">
+      <h2 data-i18n="Journey">Journey</h2>
+      <span class="muted" id="journey-stat"></span>
+    </div>
+    <p class="hint" data-i18n="Where do you want to end up? A city, an airport code or coordinates. The route is planned for you: drive to the airport, fly, then continue on the ground.">
+      Where do you want to end up? A city, an airport code or coordinates. The route is
+      planned for you: drive to the airport, fly, then continue on the ground.
+    </p>
+    <div class="search-row">
+      <svg class="search-icon" viewBox="0 0 24 24"><path d="M11 3.5a1 1 0 0 1 2 0V9l8 4.5v2l-8-2.3v4l3 2v1.8l-4-1.3-4 1.3V19l3-2v-4L3 15.5v-2L11 9Z"/></svg>
+      <input id="dest-input" type="search" autocomplete="off" spellcheck="false"
+             data-i18n-attr="placeholder:Destination: city, airport or coordinates">
+      <button class="btn btn-ghost btn-sm" id="dest-btn" data-i18n="Plan">Plan</button>
+    </div>
+    <div id="dest-results" class="results" hidden></div>
+    <div id="journey-plan" hidden></div>
+  </section>
+
+  <section class="block">
     <div class="block-head"><h2 data-i18n="Manual control">Manual control</h2></div>
     <div class="dpad" id="dpad">
       <button data-heading="315" class="diag"></button>

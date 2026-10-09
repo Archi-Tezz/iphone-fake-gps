@@ -116,6 +116,28 @@ a **Back to device** button appears to return.
 
 ![context menu](docs/screenshots/context-menu.jpg)
 
+### Journeys: drive, fly, walk
+
+Type a destination — a city, an airport code or coordinates — and the trip is
+planned as a sequence of legs, each with the profile that fits it:
+
+```
+Drive to VKO      Car, city     21.8 km
+Fly VKO → DXB     Plane       3680.7 km
+Drive from DXB    Car, city     11.3 km
+```
+
+The nearest airport to each end is picked from a bundled database of **1150
+airports in 217 countries**, built from [OurAirports](https://ourairports.com/)
+(public domain, regenerated daily). Searching airports needs no internet at all.
+
+Short trips stay on the ground: a flight is only planned when it would actually
+dominate the journey, so going to the next town does not route you through an
+airport. Legs hand over automatically — when the drive finishes, the plane
+profile takes over mid-route with its own acceleration.
+
+Rebuild the database with `tools/make_airports.py` to pick up new airports.
+
 ### Maps
 
 Five styles on two engines, chosen in settings:
@@ -215,6 +237,10 @@ of the program itself:
 ios-loc.exe doctor
 ```
 
+Everything is also written to **`ios-loc.log`** next to the executable — that
+file is what to send when something goes wrong, since the console window is
+usually closed by then.
+
 | Symptom | Fix |
 |---|---|
 | `usbmuxd: UNAVAILABLE` | Install Apple Devices or iTunes; check the Apple Mobile Device Service in `services.msc` |
@@ -224,6 +250,7 @@ ios-loc.exe doctor
 | Tunnel fails on iOS 17+ | `pip install -U pymobiledevice3` and rebuild, or run `pymobiledevice3 remote tunneld` as administrator |
 | Map does not render | Pick **Standard** in settings — vector maps need WebGL |
 | A position does not update in one app | Close and reopen it; many cache the last known location |
+| It worked, then stopped moving the device | Fixed in 1.5.0 — the idle DTX channel is now reopened automatically. Check `ios-loc.log` next to the executable |
 
 ---
 
@@ -238,6 +265,8 @@ iosloc/
   session.py    the controller: one device, one runner, one pump task
   server.py     local HTTP API and the panel
   access.py     LAN access: token, addresses, QR
+  airports.py   airport database and the drive/fly/walk journey planner
+  logsetup.py   rotating log file next to the executable
   i18n.py       message translation
   cli.py        command line
   static/       the panel: HTML, CSS, JS, both map engines, styles and icons
@@ -246,7 +275,7 @@ tools/
   make_map_styles.py fetches the vector map styles
   make_release.py    builds the distributable archive and verifies it
 tests/
-  test_core.py  58 tests
+  test_core.py  71 tests
 ```
 
 The path to the device differs by iOS version, and `device.py` hides it:

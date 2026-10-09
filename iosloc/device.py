@@ -242,6 +242,31 @@ async def enable_wifi_connection(udid: Optional[str] = None, enable: bool = True
         "should appear marked Network.")
 
 
+#: Fragments that mark a transport failure rather than a rejected request.
+_DEAD_CHANNEL_MARKERS = (
+    "channel is closed",
+    "connection terminated",
+    "connection aborted",
+    "connection reset",
+    "broken pipe",
+    "not connected",
+    "transport closed",
+)
+
+
+def _is_dead_channel(exc: BaseException) -> bool:
+    """Whether this exception means the link died, not that the call was wrong.
+
+    Matched on the message as well as the type: pymobiledevice3 raises several
+    unrelated classes for a dropped transport, and new ones appear between
+    releases, so a type list alone goes stale quietly.
+    """
+    if isinstance(exc, (ConnectionError, BrokenPipeError, EOFError, OSError, asyncio.IncompleteReadError)):
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _DEAD_CHANNEL_MARKERS)
+
+
 @dataclass
 class DeviceLink:
     """An open location-override channel to one device.
@@ -304,17 +329,60 @@ class DeviceLink:
 
     async def set(self, latitude: float, longitude: float) -> None:
         """Report the device as being at these coordinates."""
-        if self._backend is None:
-            raise errors.NotConnectedError(t("No active connection to the device."))
-        async with self._lock:
-            await self._backend.set(latitude, longitude)
+        await self._run(lambda backend: backend.set(latitude, longitude))
 
     async def clear(self) -> None:
         """Stop overriding and let the device report its real location again."""
+        await self._run(lambda backend: backend.clear())
+
+    async def _run(self, action) -> None:
+        """Run a channel operation, reopening the link once if it has died.
+
+        The DTX channel does not survive long idle periods: the device closes it
+        and the next write fails with "Channel is closed". That is invisible
+        until someone finally moves the location, which is exactly when it
+        matters, so a dead channel is rebuilt and the operation retried rather
+        than reported as a failure.
+        """
         if self._backend is None:
             raise errors.NotConnectedError(t("No active connection to the device."))
         async with self._lock:
-            await self._backend.clear()
+            try:
+                await action(self._backend)
+                return
+            except Exception as exc:
+                if not _is_dead_channel(exc):
+                    raise
+                logger.info("location channel is gone (%s); reopening", exc)
+
+            await self._reopen()
+            await action(self._backend)
+
+    async def _reopen(self) -> None:
+        """Rebuild the whole link: channel, tunnel and lockdown.
+
+        Only the channel is usually dead, but the tunnel underneath it may be
+        too, and telling them apart costs more than simply starting over --
+        which takes a second or two because the developer image is already
+        mounted.
+        """
+        udid = self.info.udid if self.info else self.udid
+        stack, self._stack = self._stack, None
+        self._backend = None
+        if stack is not None:
+            with suppress(Exception):
+                await stack.aclose()
+
+        fresh = AsyncExitStack()
+        try:
+            self.udid = udid or self.udid
+            self._backend = await self._build(fresh)
+        except BaseException:
+            await fresh.aclose()
+            self._backend = None
+            raise
+        self._stack = fresh
+        logger.info("location channel reopened")
 
     # ---------------------------------------------------------------- internals
 

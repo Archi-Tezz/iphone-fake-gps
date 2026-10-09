@@ -145,6 +145,8 @@ REQUIRED_IN_BUILD = [
     "_internal/iosloc/static/vendor/leaflet.js",
     "_internal/iosloc/static/map-styles/dark.json",
     "_internal/iosloc/static/brand/ios-loc.ico",
+    # Without it the journey planner silently falls back to ground routes.
+    "_internal/iosloc/data/airports.json",
     # Loaded by ctypes, so no amount of import analysis finds it.
     "_internal/pytun_pmd3/wintun/bin/amd64/wintun.dll",
 ]

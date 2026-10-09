@@ -324,6 +324,85 @@ async def api_route(request: RouteRequest) -> dict[str, Any]:
     return await _guard(work())
 
 
+class JourneyRequest(BaseModel):
+    """Either explicit legs, or two points to plan between."""
+
+    legs: Optional[list[dict[str, Any]]] = None
+    start: Optional[Point] = None
+    finish: Optional[Point] = None
+    force_flight: Optional[bool] = None
+    from_current: bool = True
+
+
+@app.get("/api/airports")
+async def api_airports(q: str = "", lat: Optional[float] = None,
+                       lon: Optional[float] = None) -> dict[str, Any]:
+    """Search airports by code, city or country; or find the nearest to a point."""
+    from .airports import find_airports, nearest_airport
+
+    if q:
+        return {"airports": [a.as_dict() for a in find_airports(q)]}
+    if lat is not None and lon is not None:
+        nearest = nearest_airport(lat, lon)
+        return {"airports": [nearest.as_dict()] if nearest else []}
+    return {"airports": []}
+
+
+@app.post("/api/plan")
+async def api_plan(request: JourneyRequest) -> dict[str, Any]:
+    """Plan a journey without starting it, so the UI can show it first."""
+    async def work():
+        from .airports import plan_journey
+
+        if request.start is None or request.finish is None:
+            raise ValueError("start and finish are required")
+        legs = plan_journey(
+            (request.start.lat, request.start.lon),
+            (request.finish.lat, request.finish.lon),
+            force_flight=request.force_flight,
+        )
+        return {
+            "legs": [leg.as_dict() for leg in legs],
+            "total_m": round(sum(leg.length for leg in legs), 1),
+        }
+
+    return await _guard(work())
+
+
+@app.post("/api/journey")
+async def api_journey(request: JourneyRequest) -> dict[str, Any]:
+    """Start a multi-leg journey, planning it first when only endpoints are given."""
+    async def work():
+        from .airports import plan_journey
+
+        legs = request.legs
+        if not legs:
+            if request.start is None or request.finish is None:
+                raise ValueError("either legs, or start and finish, are required")
+            planned = plan_journey(
+                (request.start.lat, request.start.lon),
+                (request.finish.lat, request.finish.lon),
+                force_flight=request.force_flight,
+            )
+            legs = [
+                {"points": [[p[0], p[1]] for p in leg.points],
+                 "profile": leg.profile, "note": leg.note}
+                for leg in planned
+            ]
+        else:
+            legs = [
+                {"points": [[p["lat"], p["lon"]] if isinstance(p, dict) else [p[0], p[1]]
+                            for p in leg["points"]],
+                 "profile": leg.get("profile"), "note": leg.get("note", "")}
+                for leg in legs
+            ]
+
+        summary = await session.follow_journey(legs, from_current=request.from_current)
+        return {"journey": summary, "state": session.state()}
+
+    return await _guard(work())
+
+
 @app.post("/api/steer")
 async def api_steer(request: SteerRequest) -> dict[str, Any]:
     async def work():

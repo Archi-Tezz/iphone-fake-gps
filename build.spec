@@ -9,8 +9,10 @@
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 datas = [
-    # The web panel: HTML/CSS/JS, the vendored Leaflet and the icon set.
+    # The web panel: HTML/CSS/JS, both map engines and the icon set.
     ("iosloc/static", "iosloc/static"),
+    # The airport database the journey planner reads at runtime.
+    ("iosloc/data", "iosloc/data"),
 ]
 
 # pymobiledevice3 ships resources it reads at runtime (device tables, certs).

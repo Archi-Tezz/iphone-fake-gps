@@ -157,6 +157,23 @@ const RU = {
     "Телефон должен быть в той же сети Wi-Fi, что и компьютер. Кабель при этом всё равно нужен — именно по нему идёт подмена.",
   "Checking…": "Проверяем…",
 
+  // -- journey --------------------------------------------------------------
+  "Journey": "Путешествие",
+  "Plan": "Проложить",
+  "Planning…": "Прокладываем…",
+  "Destination: city, airport or coordinates": "Куда: город, аэропорт или координаты",
+  "Where do you want to end up? A city, an airport code or coordinates. The route is planned for you: drive to the airport, fly, then continue on the ground.":
+    "Куда хотите попасть? Город, код аэропорта или координаты. Маршрут проложится сам: доехать до аэропорта, перелёт, дальше по земле.",
+  "Start the journey": "Отправиться",
+  "Total: {distance}": "Всего: {distance}",
+  "leg {n} of {total}": "этап {n} из {total}",
+  "Set a starting position on the map first.": "Сначала поставьте начальную точку на карте.",
+  "Ground route": "По земле",
+  "Drive to {code}": "Доехать до {code}",
+  "Fly {from} → {to}": "Перелёт {from} → {to}",
+  "Drive from {code}": "Доехать от {code}",
+  "Walk from {code}": "Пешком от {code}",
+
   // -- hints ----------------------------------------------------------------
   "<b>Shift + click</b> on the map adds a route point.<br>Right-click for actions. Drag a point to move it, click it to delete.":
     "<b>Shift + клик</b> по карте — добавить точку маршрута.<br>Правый клик по карте — меню действий. Точку можно тянуть мышью, клик по ней — удалить.",
@@ -165,6 +182,7 @@ const RU = {
   "Drag to move · click to delete": "Потяните, чтобы сдвинуть · клик — удалить",
 
   // -- toasts ---------------------------------------------------------------
+  "Connecting to {name}…": "Подключаемся к {name}…",
   "Connected. Click the map to set a position.":
     "Подключено. Кликните по карте, чтобы поставить точку.",
   "Disconnected, real location restored": "Отключено, реальная геопозиция возвращена",

@@ -58,6 +58,9 @@ class LocationSession:
         self._trail: Deque[tuple[float, float]] = deque(maxlen=TRAIL_LIMIT)
         self._error: Optional[str] = None
         self._fixes_sent = 0
+        #: Remaining legs of a multi-leg journey, and which one is running.
+        self._journey: list[dict[str, Any]] = []
+        self._leg_index = 0
 
     # ------------------------------------------------------------- connection
 
@@ -215,6 +218,10 @@ class LocationSession:
                 coordinates.append((self._last_fix.latitude, self._last_fix.longitude))
             coordinates.extend((float(p[0]), float(p[1])) for p in points)
 
+            # A plain route replaces whatever journey was running.
+            self._journey = []
+            self._leg_index = 0
+
             track = Track(coordinates)
             speed = self._profile.speed if speed_kmh is None else kmh_to_ms(speed_kmh)
             self._runner = RouteRunner(
@@ -235,6 +242,110 @@ class LocationSession:
                 "mode": loop_mode.value,
                 "eta_s": round(self._runner.eta) if self._runner.eta else None,
             }
+
+    async def follow_journey(
+        self,
+        legs: Sequence[dict[str, Any]],
+        from_current: bool = True,
+    ) -> dict[str, Any]:
+        """Travel a sequence of legs, each with its own movement profile.
+
+        This is what makes a long trip believable: drive to the airport, fly,
+        then walk at the other end. Each leg runs as an ordinary route; the pump
+        moves to the next one as soon as the current finishes, switching profile
+        with it.
+        """
+        if not legs:
+            raise ValueError(t("A route needs at least one point"))
+
+        async with self._command_lock:
+            self._require_connection()
+
+            prepared: list[dict[str, Any]] = []
+            for leg in legs:
+                points = [(float(p[0]), float(p[1])) for p in leg["points"]]
+                if len(points) < 2:
+                    continue
+                prepared.append({
+                    "points": points,
+                    "profile": leg.get("profile") or DEFAULT_PROFILE,
+                    "note": leg.get("note", ""),
+                })
+            if not prepared:
+                raise ValueError(t("A route needs at least one point"))
+
+            # Start from where the device is, so the first leg does not teleport.
+            if from_current and self._last_fix is not None:
+                first = prepared[0]
+                here = (self._last_fix.latitude, self._last_fix.longitude)
+                if distance(*here, *first["points"][0]) > MIN_RESEND_DISTANCE_M:
+                    first["points"].insert(0, here)
+
+            self._journey = prepared
+            self._leg_index = 0
+            self._paused = False
+            self._trail.clear()
+            self._begin_leg(0)
+            self._start_pump(restart=True)
+
+            total = sum(self._leg_length(leg) for leg in prepared)
+            return {
+                "legs": [
+                    {
+                        "note": leg["note"],
+                        "profile": leg["profile"],
+                        "length_m": round(self._leg_length(leg), 1),
+                        "points": len(leg["points"]),
+                    }
+                    for leg in prepared
+                ],
+                "total_m": round(total, 1),
+                "eta_s": round(self._journey_eta()),
+            }
+
+    @staticmethod
+    def _leg_length(leg: dict[str, Any]) -> float:
+        points = leg["points"]
+        return sum(distance(*points[i - 1], *points[i]) for i in range(1, len(points)))
+
+    def _journey_eta(self) -> float:
+        """Rough time for the legs not yet finished, at each one's cruise speed."""
+        total = 0.0
+        for index in range(self._leg_index, len(self._journey)):
+            leg = self._journey[index]
+            speed = get_profile(leg["profile"]).speed
+            if speed <= 0:
+                continue
+            remaining = self._leg_length(leg)
+            if index == self._leg_index and isinstance(self._runner, RouteRunner):
+                remaining = self._runner.remaining
+            total += remaining / speed
+        return total
+
+    def _begin_leg(self, index: int) -> None:
+        """Make leg `index` the active route, with its own profile."""
+        leg = self._journey[index]
+        self._leg_index = index
+        self._profile = get_profile(leg["profile"])
+        self._runner = RouteRunner(
+            track=Track(leg["points"]),
+            speed=self._profile.speed,
+            mode=LoopMode.ONCE,
+            jitter_m=self._profile.jitter_m,
+            speed_jitter=self._profile.speed_jitter,
+            accel=self._profile.accel,
+        )
+        logger.info(
+            "journey leg %d/%d: %s (%s)",
+            index + 1, len(self._journey), leg["note"] or "leg", leg["profile"],
+        )
+
+    def _advance_journey(self) -> bool:
+        """Move to the next leg. False when the journey is over."""
+        if not self._journey or self._leg_index + 1 >= len(self._journey):
+            return False
+        self._begin_leg(self._leg_index + 1)
+        return True
 
     async def set_profile(self, profile: str, keep_speed: bool = False) -> Profile:
         """Switch profile mid-run; the active runner is retuned, not restarted."""
@@ -291,6 +402,8 @@ class LocationSession:
             self._paused = False
             if restore:
                 self._runner = None
+                self._journey = []
+                self._leg_index = 0
                 if self._link is not None and self._override_active:
                     await self._link.clear()
                     self._override_active = False
@@ -361,7 +474,20 @@ class LocationSession:
             "position": None,
             "route": None,
             "trail": [{"lat": lat, "lon": lon} for lat, lon in self._trail],
+            "journey": None,
         }
+        if self._journey:
+            data["journey"] = {
+                "leg": self._leg_index + 1,
+                "legs": len(self._journey),
+                "note": self._journey[self._leg_index].get("note", ""),
+                "profile": self._journey[self._leg_index].get("profile", ""),
+                "eta_s": round(self._journey_eta()),
+                "finished": (
+                    self._leg_index + 1 >= len(self._journey)
+                    and getattr(self._runner, "finished", False)
+                ),
+            }
         if fix is not None:
             data["position"] = {
                 "lat": round(fix.latitude, 7),
@@ -437,6 +563,11 @@ class LocationSession:
                     continue
                 fix = self._runner.advance(dt)
                 await self._send(fix)
+
+                # A finished leg hands over to the next one without a gap.
+                if getattr(self._runner, "finished", False) and self._journey:
+                    if self._advance_journey():
+                        last_tick = time.monotonic()
         except asyncio.CancelledError:
             raise
         except errors.IosLocError as exc:

@@ -354,6 +354,43 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(route["target_speed_kmh"], 900.0, delta=1.0)
         await self.session.stop()
 
+    async def test_journey_switches_profile_between_legs(self):
+        """Legs hand over automatically, each with its own profile."""
+        legs = [
+            {"points": [[55.75000, 37.60000], [55.75007, 37.60000]], "profile": "walk", "note": "a"},
+            {"points": [[55.75007, 37.60000], [55.75107, 37.60000]], "profile": "city", "note": "b"},
+            {"points": [[55.75107, 37.60000], [55.75114, 37.60000]], "profile": "walk", "note": "c"},
+        ]
+        summary = await self.session.follow_journey(legs, from_current=False)
+        self.assertEqual(len(summary["legs"]), 3)
+
+        seen = []
+        for _ in range(400):
+            await asyncio.sleep(0.1)
+            journey = self.session.state()["journey"]
+            if journey is None:
+                continue
+            step = (journey["leg"], journey["profile"])
+            if not seen or seen[-1] != step:
+                seen.append(step)
+            if journey["finished"]:
+                break
+
+        self.assertEqual([s[0] for s in seen], [1, 2, 3], "every leg must run in order")
+        self.assertEqual([s[1] for s in seen], ["walk", "city", "walk"])
+        end = self.link.sent[-1]
+        self.assertLess(distance(end[0], end[1], 55.75114, 37.60000), 5.0)
+
+    async def test_plain_route_clears_a_running_journey(self):
+        await self.session.follow_journey(
+            [{"points": [[55.75, 37.60], [55.76, 37.60]], "profile": "walk", "note": "a"}],
+            from_current=False,
+        )
+        self.assertIsNotNone(self.session.state()["journey"])
+        await self.session.follow(points=[(55.75, 37.61), (55.76, 37.61)], from_current=False)
+        self.assertIsNone(self.session.state()["journey"])
+        await self.session.stop()
+
     async def test_commands_need_a_connection(self):
         await self.session.disconnect(restore=False)
         with self.assertRaises(errors.NotConnectedError):
@@ -369,6 +406,150 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_route_needs_at_least_one_point(self):
         with self.assertRaises(ValueError):
             await self.session.follow(points=[], from_current=False)
+
+
+class DeadChannelTests(unittest.IsolatedAsyncioTestCase):
+    """The DTX channel dies from idleness; the link has to survive that.
+
+    Symptom in the wild: connect, spend a few minutes picking a place on the
+    map, then move the device -- and the write fails with "Channel is closed"
+    because the phone closed the channel while nothing was being sent.
+    """
+
+    def test_transport_failures_are_recognised(self):
+        from iosloc.device import _is_dead_channel
+
+        for exc in (
+            Exception("Channel is closed"),
+            Exception("ConnectionTerminatedError: connection terminated"),
+            ConnectionResetError("reset by peer"),
+            BrokenPipeError(),
+            OSError("transport closed"),
+        ):
+            with self.subTest(error=exc):
+                self.assertTrue(_is_dead_channel(exc))
+
+    def test_real_failures_are_not_mistaken_for_a_dead_channel(self):
+        """A rejected request must surface, not trigger an endless reconnect."""
+        from iosloc.device import _is_dead_channel
+
+        for exc in (ValueError("latitude 91 is outside [-90, 90]"),
+                    KeyError("UniqueChipID"),
+                    RuntimeError("developer mode is disabled")):
+            with self.subTest(error=exc):
+                self.assertFalse(_is_dead_channel(exc))
+
+    async def test_a_dead_channel_is_reopened_and_the_write_retried(self):
+        from iosloc.device import DeviceLink
+
+        class Backend:
+            def __init__(self, fail_first): self.fail_first = fail_first; self.sent = []
+            async def set(self, lat, lon):
+                if self.fail_first:
+                    self.fail_first = False
+                    raise Exception("ConnectionTerminatedError: Channel is closed")
+                self.sent.append((lat, lon))
+            async def clear(self): pass
+
+        link = DeviceLink()
+        link._backend = Backend(fail_first=True)
+        reopened = []
+
+        async def fake_reopen():
+            reopened.append(True)
+            link._backend = Backend(fail_first=False)
+
+        link._reopen = fake_reopen
+        await link.set(55.75, 37.62)
+
+        self.assertEqual(len(reopened), 1, "the link should have been rebuilt once")
+        self.assertEqual(link._backend.sent, [(55.75, 37.62)], "the write must be retried")
+
+    async def test_a_second_failure_is_reported(self):
+        """If it is still broken after reopening, the user hears about it."""
+        from iosloc.device import DeviceLink
+
+        class AlwaysDead:
+            async def set(self, lat, lon):
+                raise Exception("Channel is closed")
+
+        link = DeviceLink()
+        link._backend = AlwaysDead()
+
+        async def fake_reopen():
+            link._backend = AlwaysDead()
+
+        link._reopen = fake_reopen
+        with self.assertRaises(Exception) as caught:
+            await link.set(55.75, 37.62)
+        self.assertIn("Channel is closed", str(caught.exception))
+
+
+class AirportTests(unittest.TestCase):
+    """The airport database and the journey planner."""
+
+    def test_database_is_bundled_and_sane(self):
+        from iosloc.airports import load_airports
+
+        airports = load_airports()
+        self.assertGreater(len(airports), 500, "the bundled airport list looks truncated")
+        for airport in airports[:50]:
+            self.assertEqual(len(airport.iata), 3)
+            self.assertTrue(-90 <= airport.lat <= 90)
+            self.assertTrue(-180 <= airport.lon <= 180)
+
+    def test_search_by_code_city_and_accentless_name(self):
+        from iosloc.airports import find_airports
+
+        self.assertEqual(find_airports("SVO")[0].iata, "SVO")
+        self.assertTrue(any(a.iata == "DXB" for a in find_airports("dubai")))
+        # "istanbul" must match "İstanbul": folding has to strip the accent.
+        self.assertTrue(any(a.cc == "TR" for a in find_airports("istanbul")))
+
+    def test_nearest_airport_and_exclusion(self):
+        from iosloc.airports import nearest_airport
+
+        moscow = nearest_airport(55.75, 37.62)
+        self.assertEqual(moscow.cc, "RU")
+        other = nearest_airport(55.75, 37.62, exclude=(moscow.iata,))
+        self.assertNotEqual(other.iata, moscow.iata)
+
+    def test_short_trip_stays_on_the_ground(self):
+        from iosloc.airports import plan_journey
+
+        legs = plan_journey((55.75, 37.62), (55.43, 37.55))
+        self.assertEqual(len(legs), 1)
+        self.assertNotEqual(legs[0].profile, "plane")
+
+    def test_long_trip_becomes_drive_fly_drive(self):
+        from iosloc.airports import plan_journey
+
+        legs = plan_journey((55.70, 37.55), (25.2048, 55.2708))
+        profiles = [leg.profile for leg in legs]
+        self.assertIn("plane", profiles)
+        self.assertEqual(profiles.count("plane"), 1, "exactly one flight leg")
+        flight = next(leg for leg in legs if leg.profile == "plane")
+        self.assertGreater(flight.length, 1_000_000)
+        # The flight must be the bulk of the trip, not a detour.
+        self.assertGreater(flight.length, sum(l.length for l in legs if l is not flight))
+
+    def test_legs_join_end_to_end(self):
+        """Each leg has to start where the previous one stopped."""
+        from iosloc.airports import plan_journey
+        from iosloc.geo import distance
+
+        legs = plan_journey((48.8566, 2.3522), (35.6762, 139.6503))  # Paris -> Tokyo
+        for before, after in zip(legs, legs[1:]):
+            gap = distance(*before.points[-1], *after.points[0])
+            self.assertLess(gap, 1.0, "legs must be continuous")
+
+    def test_force_flight_overrides_the_distance_rule(self):
+        from iosloc.airports import plan_journey
+
+        near = ((55.75, 37.62), (55.43, 37.55))
+        self.assertNotIn("plane", [l.profile for l in plan_journey(*near)])
+        forced = plan_journey(*near, force_flight=True)
+        self.assertTrue(any(l.profile == "plane" for l in forced) or len(forced) == 1)
 
 
 class ServerShapeTests(unittest.TestCase):

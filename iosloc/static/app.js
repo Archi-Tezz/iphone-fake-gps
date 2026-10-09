@@ -1044,6 +1044,15 @@ function applyState(server) {
   const needle = $("hud-needle");
   if (needle && position) needle.style.transform = `rotate(${position.heading}deg)`;
 
+  // A journey reports which leg is running; a plain route does not.
+  const journey = server.journey;
+  $("journey-stat").textContent = journey
+    ? t("leg {n} of {total}", { n: journey.leg, total: journey.legs })
+    : "";
+  if (journey && !journey.finished) {
+    $("hud-mode").textContent = translateNote(journey.note) || t("route");
+  }
+
   const route = server.route;
   const progressBar = $("hud-progress");
   if (route && typeof route.progress === "number") {
@@ -1088,6 +1097,34 @@ function formatDistance(metresValue) {
 }
 
 // ------------------------------------------------------------- connection
+
+/** Connect without asking when there is exactly one ready device.
+ *
+ * Picking from a list of one is pure ceremony. Anything else -- no devices, a
+ * device that needs attention, or several of them -- opens the chooser, where
+ * the reason is spelled out.
+ */
+async function autoConnect() {
+  let devices = [];
+  try {
+    ({ devices } = await api("/api/devices"));
+  } catch {
+    await openDevicePicker();
+    return;
+  }
+
+  const ready = devices.filter((device) => device.paired && !device.problem);
+  if (ready.length === 1 && devices.length === 1) {
+    toast(t("Connecting to {name}…", { name: ready[0].name }), "", 2600);
+    const result = await call("/api/connect", { udid: ready[0].udid });
+    if (result) {
+      toast(t("Connected. Click the map to set a position."), "good", 4200);
+      await poll();
+      return;
+    }
+  }
+  await openDevicePicker();
+}
 
 async function openDevicePicker() {
   $("sheet-backdrop").hidden = false;
@@ -1487,6 +1524,129 @@ function repeatLastRoute() {
   loadSavedRoute({ ...state.lastRoute, name: t("Repeat last") });
 }
 
+// ---------------------------------------------------------------- journey
+
+let plannedLegs = null;
+
+/** Resolve what the user typed into a destination: airport, coordinates or address. */
+async function resolveDestination(query) {
+  const direct = parseCoordinates(query);
+  if (direct) return [{ label: `${direct.lat.toFixed(4)}, ${direct.lon.toFixed(4)}`, ...direct }];
+
+  // Airports come from the bundled database, so this works with no internet.
+  const { airports } = await api(`/api/airports?q=${encodeURIComponent(query)}`);
+  const results = airports.map((a) => ({ label: a.label, lat: a.lat, lon: a.lon, airport: true }));
+  if (results.length || !settings.online) return results;
+
+  const { results: places } = await api("/api/search", { query, online: true });
+  return places.map((p) => ({ label: p.name, lat: p.lat, lon: p.lon }));
+}
+
+async function planJourneyTo(destination) {
+  const position = state.server && state.server.position;
+  const from = position
+    ? { lat: position.lat, lon: position.lon }
+    : (engine ? { lat: engine.getCenter()[0], lon: engine.getCenter()[1] } : null);
+  if (!from) {
+    toast(t("Set a starting position on the map first."), "bad");
+    return;
+  }
+
+  const box = $("journey-plan");
+  box.hidden = false;
+  box.innerHTML = `<p class="muted">${t("Planning…")}</p>`;
+
+  try {
+    const plan = await api("/api/plan", {
+      start: from,
+      finish: { lat: destination.lat, lon: destination.lon },
+    });
+    plannedLegs = plan.legs;
+
+    const rows = plan.legs.map((leg) => `
+      <div class="leg">
+        <span class="leg-note">${escapeHtml(translateNote(leg.note))}</span>
+        <span class="leg-meta">${escapeHtml(t(profileLabel(leg.profile)))} · ${formatDistance(leg.length_m)}</span>
+      </div>`).join("");
+
+    box.innerHTML = rows
+      + `<p class="muted journey-total">${escapeHtml(t("Total: {distance}", { distance: formatDistance(plan.total_m) }))}</p>`
+      + `<button class="btn btn-accent btn-wide" id="journey-go">${escapeHtml(t("Start the journey"))}</button>`;
+    $("journey-go").addEventListener("click", startPlannedJourney);
+    // Show the whole trip, so the flight leg is obvious.
+    fitToPoints(plan.legs.flatMap((leg) => leg.points.map((p) => [p.lat, p.lon])));
+  } catch (error) {
+    box.innerHTML = `<p class="device-warn">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+/** Translate a leg note like "Drive to SVO" without losing the code in it. */
+function translateNote(note) {
+  if (!note) return "";
+  const patterns = [
+    [/^Drive to (\w+)$/, "Drive to {code}"],
+    [/^Drive from (\w+)$/, "Drive from {code}"],
+    [/^Walk from (\w+)$/, "Walk from {code}"],
+  ];
+  for (const [regex, key] of patterns) {
+    const match = note.match(regex);
+    if (match) return t(key, { code: match[1] });
+  }
+  const flight = note.match(/^Fly (\w+) → (\w+)$/);
+  if (flight) return t("Fly {from} → {to}", { from: flight[1], to: flight[2] });
+  return t(note);
+}
+
+function profileLabel(key) {
+  const profile = state.profiles.find((p) => p.key === key);
+  return profile ? profile.label : key;
+}
+
+async function startPlannedJourney() {
+  if (!plannedLegs) return;
+  const result = await call("/api/journey", { legs: plannedLegs, from_current: true });
+  if (result && result.journey) {
+    const { total_m: total, eta_s: eta } = result.journey;
+    toast(t("On the way: {distance}", { distance: formatDistance(total) })
+      + (eta ? t(", about {time}", { time: formatDuration(eta) }) : ""), "good", 5000);
+    $("journey-plan").hidden = true;
+    $("dest-results").hidden = true;
+  }
+}
+
+async function runDestinationSearch() {
+  const query = $("dest-input").value.trim();
+  if (!query) return;
+  const box = $("dest-results");
+  box.hidden = false;
+  box.innerHTML = `<p class="muted" style="padding:8px 11px">${t("Searching…")}</p>`;
+  try {
+    const found = await resolveDestination(query);
+    if (!found.length) {
+      box.innerHTML = `<p class="muted" style="padding:8px 11px">${t("Nothing found")}</p>`;
+      return;
+    }
+    if (found.length === 1) {
+      box.hidden = true;
+      await planJourneyTo(found[0]);
+      return;
+    }
+    box.innerHTML = "";
+    for (const item of found) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = item.label;
+      button.addEventListener("click", async () => {
+        box.hidden = true;
+        await planJourneyTo(item);
+      });
+      box.append(button);
+    }
+  } catch (error) {
+    box.innerHTML = `<p class="device-warn" style="padding:8px 11px">${escapeHtml(error.message)}</p>`;
+  }
+}
+
 // ------------------------------------------------------------- favourites
 
 function loadFavourites() {
@@ -1797,6 +1957,11 @@ function wire() {
   $("phone-backdrop").addEventListener("click", (event) => {
     if (event.target === $("phone-backdrop")) $("phone-backdrop").hidden = true;
   });
+  $("dest-btn").addEventListener("click", runDestinationSearch);
+  $("dest-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); runDestinationSearch(); }
+  });
+
   $("fav-add-btn").addEventListener("click", addFavourite);
   $("route-save-btn").addEventListener("click", saveCurrentRoute);
   $("route-repeat-btn").addEventListener("click", repeatLastRoute);
@@ -1881,7 +2046,7 @@ async function boot() {
   setInterval(poll, POLL_MS);
 
   if (!(state.server && state.server.connected)) {
-    setTimeout(() => openDevicePicker(), 400);
+    await autoConnect();
   }
 }
 

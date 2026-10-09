@@ -167,6 +167,12 @@ async def _doctor() -> int:
         print(f"pymobiledevice3: NOT READY ({exc})")
         return 1
 
+    from .logsetup import current_log_path
+
+    path = current_log_path()
+    if path:
+        print(f"Log file: {path}")
+
     if not _check_imports():
         ok = False
 
@@ -363,6 +369,14 @@ def _run(argv: Optional[Sequence[str]]) -> int:
     )
     # pymobiledevice3 is chatty at INFO even when our own level is higher.
     logging.getLogger("pymobiledevice3").setLevel(logging.DEBUG if args.verbose else logging.ERROR)
+
+    # The file keeps what the console throws away, which is what makes a report
+    # from someone else's machine usable.
+    from .logsetup import setup_file_logging
+
+    log_path = setup_file_logging(verbose=args.verbose)
+    if log_path and args.command in ("ui", "doctor"):
+        print(f"Log file: {log_path}", flush=True)
 
     if args.command == "ui":
         from .server import serve
