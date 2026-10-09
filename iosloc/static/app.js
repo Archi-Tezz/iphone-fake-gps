@@ -213,6 +213,18 @@ const MAP_TYPES = {
 //: hand, so the waypoints stay a cheap layer instead of a marker each.
 const MAX_DRAGGABLE_WAYPOINTS = 60;
 
+//: A journey leg is drawn in the colour of how it is travelled, so where the
+//: driving ends and the flight begins is obvious at a glance.
+const LEG_COLOURS = {
+  stand: "#30d158", walk: "#30d158", run: "#30d158",
+  bike: "#32d7c3",
+  city: "#0a84ff", highway: "#0a84ff",
+  train: "#ff9f0a",
+  plane: "#bf5af2",
+};
+
+const LEG_COLOUR_DEFAULT = "#5e5ce6";
+
 const LINE_STYLES = {
   route: { color: "#5e5ce6", width: 5, opacity: 0.55 },
   trail: { color: "#30d158", width: 4, opacity: 0.9 },
@@ -270,6 +282,15 @@ function ensureAsset(url, tag) {
   });
   loaded.set(url, promise);
   return promise;
+}
+
+/** Width the side panel takes from the map, so fitted shapes stay visible. */
+function panelOffsetX() {
+  const panel = $("panel");
+  if (!panel || panel.classList.contains("collapsed")) return 20;
+  const width = panel.getBoundingClientRect().width;
+  // On a narrow screen the panel sits at the bottom, not the side.
+  return window.innerWidth > 900 ? Math.min(width + 24, window.innerWidth * 0.45) : 20;
 }
 
 function puckElement() {
@@ -333,6 +354,21 @@ class LeafletEngine {
     if (this.lines[id]) this.lines[id].setLatLngs(points);
   }
 
+  setLegs(legs) {
+    if (!this.legLayer) this.legLayer = L.layerGroup().addTo(this.map);
+    this.legLayer.clearLayers();
+    for (const leg of legs) {
+      L.polyline(leg.points.map((p) => [p.lat, p.lon]), {
+        color: LEG_COLOURS[leg.profile] || LEG_COLOUR_DEFAULT,
+        weight: leg.profile === "plane" ? 3 : 5,
+        // A finished leg fades back; the one being travelled stays bright.
+        opacity: leg.done ? 0.35 : 0.85,
+        dashArray: leg.profile === "plane" ? "10 8" : undefined,
+        lineCap: "round",
+      }).addTo(this.legLayer);
+    }
+  }
+
   setWaypoints(points, handlers = {}) {
     this.waypointLayer.clearLayers();
     const interactive = Boolean(handlers.onMove) && points.length <= MAX_DRAGGABLE_WAYPOINTS;
@@ -384,7 +420,15 @@ class LeafletEngine {
   }
 
   fitBounds(points) {
-    this.map.fitBounds(L.latLngBounds(points), { paddingTopLeft: [380, 110], paddingBottomRight: [60, 60] });
+    try {
+      this.map.fitBounds(L.latLngBounds(points), {
+        paddingTopLeft: [panelOffsetX(), 110],
+        paddingBottomRight: [60, 60],
+      });
+    } catch (error) {
+      console.warn("fitBounds failed, centring instead:", error);
+      this.map.fitBounds(L.latLngBounds(points));
+    }
   }
 
   getCenter() {
@@ -455,6 +499,7 @@ class MapLibreEngine {
         if (id === "waypoints") this.setWaypoints(points);
         else this.setLine(id, points);
       }
+      if (this.pendingLegs) this.setLegs(this.pendingLegs);
     });
 
     // A vector map that never finishes loading is the failure this whole
@@ -477,9 +522,20 @@ class MapLibreEngine {
 
   _installLayers() {
     const empty = { type: "FeatureCollection", features: [] };
-    for (const id of ["trail", "route", "draft", "waypoints"]) {
+    for (const id of ["trail", "route", "draft", "waypoints", "legs"]) {
       this.map.addSource(id, { type: "geojson", data: empty });
     }
+    this.map.addLayer({
+      id: "journey-legs",
+      type: "line",
+      source: "legs",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["get", "colour"],
+        "line-width": ["get", "width"],
+        "line-opacity": ["get", "opacity"],
+      },
+    });
     for (const id of ["route", "trail", "draft"]) {
       const style = LINE_STYLES[id];
       this.map.addLayer({
@@ -532,6 +588,25 @@ class MapLibreEngine {
   _set(id, data) {
     const source = this.ready && this.map.getSource(id);
     if (source) source.setData(data);
+  }
+
+  setLegs(legs) {
+    this.pendingLegs = legs;
+    this._set("legs", {
+      type: "FeatureCollection",
+      features: legs.map((leg) => ({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: leg.points.map((p) => [p.lon, p.lat]),
+        },
+        properties: {
+          colour: LEG_COLOURS[leg.profile] || LEG_COLOUR_DEFAULT,
+          width: leg.profile === "plane" ? 3 : 5,
+          opacity: leg.done ? 0.35 : 0.85,
+        },
+      })),
+    });
   }
 
   setLine(id, points) {
@@ -623,7 +698,20 @@ class MapLibreEngine {
       (acc, [lat, lon]) => acc.extend([lon, lat]),
       new maplibregl.LngLatBounds([points[0][1], points[0][0]], [points[0][1], points[0][0]]),
     );
-    this.map.fitBounds(bounds, { padding: { top: 110, bottom: 60, left: 380, right: 60 }, duration: 800 });
+    // A padding *object* makes cameraForBounds return undefined in this
+    // MapLibre build; a plain number works, and the offset keeps the shape
+    // clear of the side panel.
+    try {
+      this.map.fitBounds(bounds, {
+        padding: 70,
+        offset: [panelOffsetX() / 2, 0],
+        duration: framesWork ? 800 : 0,
+      });
+    } catch (error) {
+      console.warn("fitBounds failed, centring instead:", error);
+      const centre = bounds.getCenter();
+      this.map.easeTo({ center: centre, duration: 0 });
+    }
   }
 
   getCenter() {
@@ -845,6 +933,7 @@ function redrawAll() {
   const server = state.server;
   if (!server || !engine) return;
   const route = server.route;
+  if (engine && engine.setLegs) engine.setLegs(journey && journey.shape ? journey.shape : []);
   setLine("route", route && route.points ? route.points.map((p) => [p.lat, p.lon]) : []);
   setLine("trail", settings.showTrail ? (server.trail || []).map((p) => [p.lat, p.lon]) : []);
   if (server.position) updatePuck(server.position, puckMoving);
@@ -942,7 +1031,7 @@ function renderDraft() {
   $("route-stat").textContent = text;
   $("go-btn").disabled = state.draft.length < 1 || !(state.server && state.server.connected);
   $("gpx-export-btn").disabled = state.draft.length < 2;
-  $("route-save-btn").disabled = state.draft.length < 2;
+  $("route-save-btn").disabled = state.draft.length < 2 && !(plannedLegs && plannedLegs.length);
   // The editing controls are noise until a route exists.
   $("route-actions").hidden = state.draft.length === 0;
   $("route-hint").hidden = state.draft.length > 0;
@@ -1458,7 +1547,28 @@ function routeLength(points) {
   return total;
 }
 
+function saveCurrentJourney() {
+  if (!plannedLegs || !plannedLegs.length) return false;
+  const name = (prompt(t("Journey name:"), t("Journey")) || "").trim();
+  if (!name) return true;
+  state.savedRoutes.unshift({
+    name,
+    legs: plannedLegs.map((leg) => ({
+      points: leg.points.map((p) => [Number(p.lat.toFixed(7)), Number(p.lon.toFixed(7))]),
+      profile: leg.profile,
+      note: leg.note,
+    })),
+  });
+  state.savedRoutes = state.savedRoutes.slice(0, 25);
+  writeStored(ROUTES_KEY, state.savedRoutes);
+  renderSavedRoutes();
+  toast(t("Journey saved as \"{name}\".", { name }), "good", 3000);
+  return true;
+}
+
 function saveCurrentRoute() {
+  // A planned journey is saved whole, legs and all, rather than flattened.
+  if (saveCurrentJourney()) return;
   if (state.draft.length < 2) {
     toast(t("Need at least two route points first."), "bad");
     return;
@@ -1479,6 +1589,25 @@ function saveCurrentRoute() {
 }
 
 function loadSavedRoute(item) {
+  if (item.legs) {
+    plannedLegs = item.legs.map((leg) => ({
+      points: leg.points.map(([lat, lon]) => ({ lat, lon })),
+      profile: leg.profile,
+      note: leg.note,
+    }));
+    const box = $("journey-plan");
+    box.hidden = false;
+    box.innerHTML = plannedLegs.map((leg) => `
+      <div class="leg">
+        <span class="leg-note">${escapeHtml(translateNote(leg.note))}</span>
+        <span class="leg-meta">${escapeHtml(t(profileLabel(leg.profile)))}</span>
+      </div>`).join("")
+      + `<button class="btn btn-accent btn-wide" id="journey-go">${escapeHtml(t("Start the journey"))}</button>`;
+    $("journey-go").addEventListener("click", startPlannedJourney);
+    fitToPoints(plannedLegs.flatMap((leg) => leg.points.map((p) => [p.lat, p.lon])));
+    toast(t("Loaded \"{name}\". Press Start the journey.", { name: item.name }), "good", 3600);
+    return;
+  }
   state.draft = item.points.map(([lat, lon]) => [lat, lon]);
   if (item.mode) {
     state.loopMode = item.mode;
@@ -1502,7 +1631,9 @@ function renderSavedRoutes() {
   state.savedRoutes.forEach((item, index) => {
     const row = document.createElement("div");
     row.className = "fav";
-    const length = formatDistance(routeLength(item.points.map(([lat, lon]) => [lat, lon])));
+    const length = formatDistance(item.legs
+      ? item.legs.reduce((sum, leg) => sum + routeLength(leg.points), 0)
+      : routeLength(item.points.map(([lat, lon]) => [lat, lon])));
     row.innerHTML = `<button class="fav-go" type="button">${escapeHtml(item.name)}`
       + ` <span class="muted">· ${length}</span></button>`
       + `<button class="fav-del" type="button" aria-label="${t("Delete")}">&times;</button>`;
@@ -1573,6 +1704,7 @@ async function planJourneyTo(destination) {
       + `<p class="muted journey-total">${escapeHtml(t("Total: {distance}", { distance: formatDistance(plan.total_m) }))}</p>`
       + `<button class="btn btn-accent btn-wide" id="journey-go">${escapeHtml(t("Start the journey"))}</button>`;
     $("journey-go").addEventListener("click", startPlannedJourney);
+    renderDraft();  // a plan counts as something worth saving
     // Show the whole trip, so the flight leg is obvious.
     fitToPoints(plan.legs.flatMap((leg) => leg.points.map((p) => [p.lat, p.lon])));
   } catch (error) {
@@ -1611,6 +1743,8 @@ async function startPlannedJourney() {
       + (eta ? t(", about {time}", { time: formatDuration(eta) }) : ""), "good", 5000);
     $("journey-plan").hidden = true;
     $("dest-results").hidden = true;
+    plannedLegs = null;
+    renderDraft();
   }
 }
 
@@ -1897,7 +2031,12 @@ function wire() {
   }
 
   $("route-undo-btn").addEventListener("click", () => { state.draft.pop(); renderDraft(); });
-  $("route-clear-btn").addEventListener("click", () => { state.draft = []; renderDraft(); });
+  $("route-clear-btn").addEventListener("click", () => {
+    state.draft = [];
+    plannedLegs = null;
+    $("journey-plan").hidden = true;
+    renderDraft();
+  });
   $("snap-btn").addEventListener("click", snapToRoads);
   $("gpx-export-btn").addEventListener("click", exportGpx);
   $("gpx-input").addEventListener("change", (event) => {

@@ -56,7 +56,13 @@ class FakeLink:
     async def close(self):
         self.is_open = False
 
+    #: Number of upcoming set() calls that should fail, as a dropped cable would.
+    fail_sends = 0
+
     async def set(self, latitude, longitude):
+        if self.fail_sends > 0:
+            self.fail_sends -= 1
+            raise ConnectionResetError("device went away")
         self.sent.append((latitude, longitude))
 
     async def clear(self):
@@ -381,6 +387,28 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         end = self.link.sent[-1]
         self.assertLess(distance(end[0], end[1], 55.75114, 37.60000), 5.0)
 
+    async def test_pause_holds_a_journey_between_legs(self):
+        """Pausing must freeze the trip wherever it is, mid-leg or not."""
+        legs = [
+            {"points": [[55.75000, 37.60000], [55.75007, 37.60000]], "profile": "walk", "note": "a"},
+            {"points": [[55.75007, 37.60000], [55.75107, 37.60000]], "profile": "city", "note": "b"},
+        ]
+        await self.session.follow_journey(legs, from_current=False)
+        await asyncio.sleep(1.2)
+
+        await self.session.pause()
+        frozen = len(self.link.sent)
+        leg_at_pause = self.session.state()["journey"]["leg"]
+        await asyncio.sleep(1.8)
+        self.assertEqual(len(self.link.sent), frozen, "a paused journey must not move")
+        self.assertEqual(self.session.state()["journey"]["leg"], leg_at_pause,
+                         "and must not skip to the next leg either")
+
+        await self.session.resume()
+        await asyncio.sleep(1.4)
+        self.assertGreater(len(self.link.sent), frozen, "resuming carries on")
+        await self.session.stop()
+
     async def test_plain_route_clears_a_running_journey(self):
         await self.session.follow_journey(
             [{"points": [[55.75, 37.60], [55.76, 37.60]], "profile": "walk", "note": "a"}],
@@ -390,6 +418,66 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         await self.session.follow(points=[(55.75, 37.61), (55.76, 37.61)], from_current=False)
         self.assertIsNone(self.session.state()["journey"])
         await self.session.stop()
+
+    async def test_route_resumes_after_the_device_comes_back(self):
+        """A yanked cable should pause the route, not destroy it."""
+        from iosloc import session as module
+
+        original_interval = module.RECONNECT_INTERVAL_SECONDS
+        module.RECONNECT_INTERVAL_SECONDS = 0.1
+        try:
+            await self.session.follow(
+                points=[(55.7558, 37.6176), (55.8000, 37.6176)],
+                profile="highway",
+                from_current=False,
+            )
+            await asyncio.sleep(1.4)
+            before = len(self.link.sent)
+            self.assertGreater(before, 0, "the route should have started")
+
+            # The device disappears for a couple of ticks, then returns.
+            self.link.fail_sends = 2
+            await asyncio.sleep(3.0)
+
+            self.assertGreater(len(self.link.sent), before, "the route must carry on")
+            self.assertIsNone(self.session.state()["error"], "a recovered drop is not an error")
+            self.assertFalse(self.session.state()["reconnecting"])
+        finally:
+            module.RECONNECT_INTERVAL_SECONDS = original_interval
+            await self.session.stop()
+
+    async def test_heartbeat_keeps_an_idle_channel_warm(self):
+        """With nothing moving, the link still sees traffic."""
+        from iosloc import session as module
+
+        original = module.HEARTBEAT_SECONDS
+        module.HEARTBEAT_SECONDS = 0.2
+        try:
+            await self.session.disconnect(restore=False)
+            await self.session.connect()
+            self.link = FakeLink.instances[-1]
+            cleared_before = self.link.cleared
+            await asyncio.sleep(0.9)
+            self.assertGreater(self.link.cleared, cleared_before,
+                               "an idle link should be poked by the heartbeat")
+        finally:
+            module.HEARTBEAT_SECONDS = original
+
+    async def test_heartbeat_leaves_an_active_override_alone(self):
+        """It must never clear a location the user actually set."""
+        from iosloc import session as module
+
+        original = module.HEARTBEAT_SECONDS
+        module.HEARTBEAT_SECONDS = 0.2
+        try:
+            await self.session.teleport(55.75, 37.61, profile="stand")
+            cleared_before = self.link.cleared
+            await asyncio.sleep(0.9)
+            self.assertEqual(self.link.cleared, cleared_before,
+                             "the heartbeat must not clear an active override")
+            self.assertTrue(self.session.state()["override_active"])
+        finally:
+            module.HEARTBEAT_SECONDS = original
 
     async def test_commands_need_a_connection(self):
         await self.session.disconnect(restore=False)
@@ -505,6 +593,27 @@ class AirportTests(unittest.TestCase):
         self.assertTrue(any(a.iata == "DXB" for a in find_airports("dubai")))
         # "istanbul" must match "İstanbul": folding has to strip the accent.
         self.assertTrue(any(a.cc == "TR" for a in find_airports("istanbul")))
+
+    def test_an_exact_code_wins_outright(self):
+        """Typing IST must mean Istanbul, not every airport in Afghanistan."""
+        from iosloc.airports import find_airports
+
+        results = find_airports("IST")
+        self.assertEqual([a.iata for a in results], ["IST"])
+
+    def test_short_queries_do_not_match_country_names(self):
+        """"ist" appears inside Afghanistan, Pakistan and Uzbekistan."""
+        from iosloc.airports import find_airports
+
+        for airport in find_airports("dme"):
+            self.assertEqual(airport.iata, "DME")
+
+    def test_city_search_still_finds_every_airport(self):
+        from iosloc.airports import find_airports
+
+        moscow = {a.iata for a in find_airports("moscow")}
+        self.assertIn("SVO", moscow)
+        self.assertIn("DME", moscow)
 
     def test_nearest_airport_and_exclusion(self):
         from iosloc.airports import nearest_airport

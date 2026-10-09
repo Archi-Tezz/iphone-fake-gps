@@ -275,7 +275,7 @@ tools/
   make_map_styles.py fetches the vector map styles
   make_release.py    builds the distributable archive and verifies it
 tests/
-  test_core.py  71 tests
+  test_core.py  78 tests
 ```
 
 The path to the device differs by iOS version, and `device.py` hides it:

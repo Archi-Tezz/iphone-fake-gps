@@ -165,6 +165,9 @@ const RU = {
   "Where do you want to end up? A city, an airport code or coordinates. The route is planned for you: drive to the airport, fly, then continue on the ground.":
     "Куда хотите попасть? Город, код аэропорта или координаты. Маршрут проложится сам: доехать до аэропорта, перелёт, дальше по земле.",
   "Start the journey": "Отправиться",
+  "Journey name:": "Название путешествия:",
+  "Journey saved as \"{name}\".": "Путешествие «{name}» сохранено.",
+  "Loaded \"{name}\". Press Start the journey.": "Загружено «{name}». Нажмите «Отправиться».",
   "Total: {distance}": "Всего: {distance}",
   "leg {n} of {total}": "этап {n} из {total}",
   "Set a starting position on the map first.": "Сначала поставьте начальную точку на карте.",

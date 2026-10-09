@@ -37,6 +37,14 @@ KEEPALIVE_SECONDS = 15.0
 MIN_RESEND_DISTANCE_M = 0.25
 #: How many recent fixes to keep for drawing the travelled path in the UI.
 TRAIL_LIMIT = 2000
+#: How often to poke an idle channel so the device does not close it. Well
+#: under the window where the drop was observed, and cheap enough to ignore.
+HEARTBEAT_SECONDS = 20.0
+#: While a route is running, keep trying to get the device back for this long
+#: before giving up -- long enough to walk over and plug the cable back in.
+RECONNECT_WINDOW_SECONDS = 180.0
+#: Delay between reconnection attempts.
+RECONNECT_INTERVAL_SECONDS = 3.0
 
 __all__ = ["LocationSession"]
 
@@ -61,6 +69,9 @@ class LocationSession:
         #: Remaining legs of a multi-leg journey, and which one is running.
         self._journey: list[dict[str, Any]] = []
         self._leg_index = 0
+        self._heartbeat: Optional[asyncio.Task[None]] = None
+        #: Set while the device is gone and the route is waiting for it back.
+        self._reconnecting = False
 
     # ------------------------------------------------------------- connection
 
@@ -90,6 +101,7 @@ class LocationSession:
             self._error = None
             self._fixes_sent = 0
             assert link.info is not None
+            self._start_heartbeat()
             logger.info(
                 "connected to %s (iOS %s) over %s",
                 link.info.name,
@@ -104,6 +116,7 @@ class LocationSession:
             await self._teardown(restore=restore)
 
     async def _teardown(self, restore: bool) -> None:
+        await self._stop_heartbeat()
         await self._stop_pump()
         self._runner = None
         if self._link is not None:
@@ -470,6 +483,7 @@ class LocationSession:
             "paused": self._paused,
             "profile": self._profile.as_dict(),
             "fixes_sent": self._fixes_sent,
+            "reconnecting": self._reconnecting,
             "error": self._error,
             "position": None,
             "route": None,
@@ -480,6 +494,17 @@ class LocationSession:
             data["journey"] = {
                 "leg": self._leg_index + 1,
                 "legs": len(self._journey),
+                # Geometry of every leg, so the map can draw each one in the
+                # colour of its profile instead of one undifferentiated line.
+                "shape": [
+                    {
+                        "profile": leg["profile"],
+                        "note": leg.get("note", ""),
+                        "points": [{"lat": lat, "lon": lon} for lat, lon in leg["points"]],
+                        "done": index < self._leg_index,
+                    }
+                    for index, leg in enumerate(self._journey)
+                ],
                 "note": self._journey[self._leg_index].get("note", ""),
                 "profile": self._journey[self._leg_index].get("profile", ""),
                 "eta_s": round(self._journey_eta()),
@@ -547,6 +572,86 @@ class LocationSession:
         with contextlib.suppress(asyncio.CancelledError):
             await pump
 
+    def _start_heartbeat(self) -> None:
+        if self._heartbeat is not None and not self._heartbeat.done():
+            return
+        self._heartbeat = asyncio.create_task(self._run_heartbeat(), name="iosloc-heartbeat")
+
+    async def _stop_heartbeat(self) -> None:
+        task, self._heartbeat = self._heartbeat, None
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _run_heartbeat(self) -> None:
+        """Keep an idle channel from being closed by the device.
+
+        A channel that nothing writes to gets closed, and the next override
+        fails -- which is invisible until someone finally moves the device.
+        While a route is running the pump already keeps it warm; when nothing is
+        moving, clearing an override that is not set is a harmless no-op that
+        still counts as traffic.
+        """
+        try:
+            while True:
+                await asyncio.sleep(HEARTBEAT_SECONDS)
+                if self._link is None or not self._link.is_open:
+                    return
+                if self._override_active or self._reconnecting:
+                    continue
+                try:
+                    await self._link.clear()
+                except Exception as exc:
+                    # The link repairs itself on the next real call; a failed
+                    # heartbeat is not worth bothering the user about.
+                    logger.debug("heartbeat failed: %s", exc)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("heartbeat stopped")
+
+    async def _wait_for_device(self) -> bool:
+        """Try to get the device back after it vanished mid-route.
+
+        Returns True once the link is usable again, False if it never came back
+        within the window -- unplugging the cable should pause a journey, not
+        destroy it.
+        """
+        if self._link is None:
+            return False
+
+        self._reconnecting = True
+        self._error = None
+        deadline = time.monotonic() + RECONNECT_WINDOW_SECONDS
+        attempt = 0
+        try:
+            while time.monotonic() < deadline:
+                attempt += 1
+                await asyncio.sleep(RECONNECT_INTERVAL_SECONDS)
+                try:
+                    await self._link.close()
+                except Exception:
+                    pass
+                try:
+                    await self._link.open()
+                except Exception as exc:
+                    logger.debug("reconnect attempt %d failed: %s", attempt, exc)
+                    continue
+                logger.info("device is back after %d attempt(s); resuming", attempt)
+                # The position was last pushed before the drop, so re-send it to
+                # put the device back where the route had got to.
+                self._last_sent_fix = None
+                return True
+            self._error = t(
+                "Lost the device and could not get it back. Check the cable and connect again."
+            )
+            logger.warning("device did not come back within %.0fs", RECONNECT_WINDOW_SECONDS)
+            return False
+        finally:
+            self._reconnecting = False
+
     async def _run_pump(self) -> None:
         """Tick the runner on the profile interval and push each fix to the device."""
         last_tick = time.monotonic()
@@ -562,7 +667,16 @@ class LocationSession:
                 if self._paused:
                     continue
                 fix = self._runner.advance(dt)
-                await self._send(fix)
+                try:
+                    await self._send(fix)
+                except Exception as exc:
+                    # The link already retries a dead channel on its own, so
+                    # reaching here means the device itself went away.
+                    logger.info("send failed (%s); waiting for the device", exc)
+                    if not await self._wait_for_device():
+                        return
+                    last_tick = time.monotonic()
+                    continue
 
                 # A finished leg hands over to the next one without a gap.
                 if getattr(self._runner, "finished", False) and self._journey:

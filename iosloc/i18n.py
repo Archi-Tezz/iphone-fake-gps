@@ -120,6 +120,8 @@ TRANSLATIONS: dict[str, str] = {
         "разблокирован, Developer Mode включён, а образ разработчика смонтирован.",
     "The location channel dropped: {error}":
         "Канал подмены локации оборвался: {error}",
+    "Lost the device and could not get it back. Check the cable and connect again.":
+        "Устройство пропало и не вернулось. Проверьте кабель и подключитесь заново.",
 
     # -- wireless ------------------------------------------------------------
     "A cable is required: wireless access can only be enabled over USB.\nError: {error}":

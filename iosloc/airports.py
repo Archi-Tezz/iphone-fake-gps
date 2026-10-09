@@ -99,17 +99,28 @@ def find_airports(query: str, limit: int = 8) -> list[Airport]:
     starts: list[Airport] = []
     contains: list[Airport] = []
 
+    # Country names are only searched for longer queries: "ist" otherwise drags
+    # in every airport in Afghanistan, Pakistan and Uzbekistan.
+    search_country = len(needle) >= 4
+
     for airport in load_airports():
         if _fold(airport.iata) == needle or _fold(airport.icao) == needle:
             exact.append(airport)
             continue
-        haystacks = (_fold(airport.city), _fold(airport.name), _fold(airport.country))
+        haystacks = [_fold(airport.city), _fold(airport.name)]
+        if search_country:
+            haystacks.append(_fold(airport.country))
         if any(h.startswith(needle) for h in haystacks):
             starts.append(airport)
         elif any(needle in h for h in haystacks):
             contains.append(airport)
 
-    return (exact + starts + contains)[:limit]
+    # An exact code is an unambiguous answer: offering alternatives next to it
+    # only invites a misclick.
+    if exact:
+        return exact[:limit]
+
+    return (starts + contains)[:limit]
 
 
 def nearest_airport(lat: float, lon: float, exclude: Sequence[str] = ()) -> Optional[Airport]:
