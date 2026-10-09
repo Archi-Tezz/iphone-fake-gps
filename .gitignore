@@ -16,3 +16,6 @@ release/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Runtime log (contains device names and paths)
+*.log

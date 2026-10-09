@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import contextlib
 import logging
 import sys
@@ -53,6 +54,11 @@ def _build_parser() -> argparse.ArgumentParser:
     wifi = sub.add_parser("wifi", help="allow working with the device over Wi-Fi (no cable)")
     wifi.add_argument("--off", action="store_true", help="turn it back off")
     sub.add_parser("doctor", help="check that everything needed is in place")
+    log_cmd = sub.add_parser("log", help="show the log file, newest last")
+    log_cmd.add_argument("-f", "--follow", action="store_true",
+                         help="keep watching for new lines (Ctrl+C to stop)")
+    log_cmd.add_argument("-n", "--lines", type=int, default=200,
+                         help="how many lines to show (default 200)")
 
     set_cmd = sub.add_parser("set", help="set a position and hold it")
     set_cmd.add_argument("latitude", type=float)
@@ -342,6 +348,50 @@ def _pause_if_window_would_vanish() -> None:
         input()
 
 
+def _log(args) -> int:
+    """Print the log file, optionally following it.
+
+    The window being closed is the normal case, not the exception -- this is how
+    you read what happened after the fact, without hunting for the file.
+    """
+    import time
+
+    from .logsetup import LOG_NAME, _candidate_directories
+
+    path = None
+    for directory in _candidate_directories():
+        candidate = directory / LOG_NAME
+        if candidate.exists():
+            path = candidate
+            break
+
+    if path is None:
+        print("No log file yet. Start the program once, then look again.")
+        return 1
+
+    print(f"Log file: {path}", flush=True)
+    print("-" * 62, flush=True)
+
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        tail = collections.deque(handle, maxlen=max(10, args.lines))
+        for line in tail:
+            print(line.rstrip(), flush=True)
+        if not args.follow:
+            return 0
+
+        print("-" * 62, flush=True)
+        print("Watching for new lines. Ctrl+C to stop.", flush=True)
+        try:
+            while True:
+                line = handle.readline()
+                if line:
+                    print(line.rstrip(), flush=True)
+                else:
+                    time.sleep(0.4)
+        except KeyboardInterrupt:
+            return 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     _force_utf8_output()
     try:
@@ -375,7 +425,9 @@ def _run(argv: Optional[Sequence[str]]) -> int:
     from .logsetup import setup_file_logging
 
     log_path = setup_file_logging(verbose=args.verbose)
-    if log_path and args.command in ("ui", "doctor"):
+    # `ui` names the file in its own banner; printing it here as well would
+    # just push the banner down the window.
+    if log_path and args.command == "doctor":
         print(f"Log file: {log_path}", flush=True)
 
     if args.command == "ui":
@@ -391,6 +443,9 @@ def _run(argv: Optional[Sequence[str]]) -> int:
             )
         except KeyboardInterrupt:
             return 0
+
+    if args.command == "log":
+        return _log(args)
 
     handlers = {
         "devices": lambda: _devices(),

@@ -923,24 +923,138 @@ body.panel-hidden #reveal-panel { display: block; }
 /* --------------------------------------------------------------- narrow */
 
 @media (max-width: 900px) {
-  .panel {
-    top: auto;
+  /* Phone layout: the map is the view, everything else is a sheet over it. */
+  .topbar {
+    top: max(8px, env(safe-area-inset-top));
     left: 8px;
     right: 8px;
-    bottom: 8px;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .logo { width: 30px; height: 30px; border-radius: 9px; }
+  .brand-text strong { font-size: 14px; }
+  /* The transport pill and the device line do not survive 375 px; the device
+     is named in the picker anyway. */
+  .brand-text span,
+  #transport-pill { display: none; }
+  .topbar-right { gap: 5px; }
+  .topbar .btn { padding: 8px 12px; font-size: 13.5px; }
+  .icon-only { padding: 8px; }
+
+  .panel {
+    top: auto;
+    left: 6px;
+    right: 6px;
+    bottom: max(6px, env(safe-area-inset-bottom));
     width: auto;
-    max-height: 56dvh;
+    max-height: 52dvh;
+    padding: 6px 14px 14px;
     border-radius: var(--radius-xl) var(--radius-xl) var(--radius-lg) var(--radius-lg);
   }
 
   .panel.collapsed { transform: translateY(calc(100% + 24px)); }
-  .hud { right: 8px; bottom: auto; top: 84px; width: 200px; }
-  .hud-value { font-size: 32px; }
+  .panel-grip { height: 26px; margin: 0 -14px 2px; }
+
+  /* A compact strip under the top bar instead of a card taking a third of
+     the screen. */
+  .hud {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    top: calc(max(8px, env(safe-area-inset-top)) + 54px);
+    bottom: auto;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+  }
+
+  .hud-main { order: 1; gap: 6px; }
+  .hud-value { font-size: 26px; }
+  .hud-compass { width: 30px; height: 30px; }
+  .hud-rows { order: 2; font-size: 12px; gap: 2px; min-width: 0; }
+  .hud-rows > div { gap: 8px; }
+  .hud-rows b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hud-progress { order: 3; grid-column: 1 / -1; }
+
+  .profiles { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+  .profiles button { padding: 8px 2px 7px; font-size: 10px; }
+  .profiles button svg { width: 18px; height: 18px; }
+
+  /* Touch targets: the d-pad is the one thing people aim at with a thumb. */
+  .dpad button { border-radius: var(--radius-sm); }
+  .btn-sm { padding: 9px 13px; }
+
+  .sheet { max-height: 86dvh; overflow-y: auto; }
+  .qr { width: 190px; height: 190px; }
+
   .maplibregl-ctrl-bottom-left { margin-left: 4px; }
-  .toasts { bottom: auto; top: 150px; }
-  #reveal-panel { top: auto; bottom: 16px; }
+  .maplibregl-ctrl-top-right { margin-top: 112px; }
+  .leaflet-top .leaflet-control { margin-top: 112px; }
+  .toasts { bottom: auto; top: 180px; }
+  #reveal-panel { top: auto; bottom: max(14px, env(safe-area-inset-bottom)); }
+  .recenter { top: auto; bottom: calc(52dvh + 14px); right: 10px; }
+}
+
+/* Installed on the home screen there is no browser chrome, so the panel can
+   sit closer to the edges. */
+@media (display-mode: standalone) {
+  .topbar { top: max(10px, env(safe-area-inset-top)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Activity log --------------------------------------------------------------
+   Monospaced, scrolled to the end, with a live dot: the question it answers is
+   "is this thing still running?", so the answer has to be visible at a glance. */
+.sheet-wide { max-width: 760px; }
+
+.log-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.log-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #30d158;
+  box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.55);
+  animation: log-pulse 2s ease-out infinite;
+}
+
+.log-dot.bad {
+  background: #ff453a;
+  box-shadow: none;
+  animation: none;
+}
+
+@keyframes log-pulse {
+  70% { box-shadow: 0 0 0 7px rgba(48, 209, 88, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(48, 209, 88, 0); }
+}
+
+.log-view {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--hairline, rgba(255, 255, 255, 0.1));
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+}
+
+.log-line-warn { color: #ffd60a; }
+.log-line-err { color: #ff6961; font-weight: 600; }

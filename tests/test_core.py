@@ -652,6 +652,58 @@ class AirportTests(unittest.TestCase):
             gap = distance(*before.points[-1], *after.points[0])
             self.assertLess(gap, 1.0, "legs must be continuous")
 
+    def test_multi_stop_chains_flights_between_airports(self):
+        from iosloc.airports import plan_multi_stop
+
+        legs = plan_multi_stop(["SVO", "DXB", "NRT"])
+        self.assertEqual([leg.profile for leg in legs], ["plane", "plane"])
+        self.assertIn("SVO", legs[0].note)
+        self.assertIn("NRT", legs[1].note)
+
+    def test_multi_stop_adds_ground_legs_at_the_ends(self):
+        from iosloc.airports import plan_multi_stop
+
+        legs = plan_multi_stop(["SVO", "DXB"], start=(55.70, 37.55), finish=(25.07, 55.14))
+        self.assertNotEqual(legs[0].profile, "plane", "it starts on the ground")
+        self.assertNotEqual(legs[-1].profile, "plane", "and ends on the ground")
+        self.assertTrue(any(leg.profile == "plane" for leg in legs))
+
+    def test_a_distant_start_flies_in_rather_than_driving(self):
+        """Starting in Vladivostok must not produce a 6000 km drive to Moscow."""
+        from iosloc.airports import plan_multi_stop
+
+        legs = plan_multi_stop(["SVO", "DXB"], start=(43.1155, 131.8855))
+        ground = [leg for leg in legs if leg.profile != "plane"]
+        for leg in ground:
+            self.assertLess(leg.length, 300_000, f"{leg.note} is too far to drive")
+        self.assertGreaterEqual(len([l for l in legs if l.profile == "plane"]), 2)
+
+    def test_neighbouring_airports_are_driven_not_flown(self):
+        from iosloc.airports import plan_multi_stop
+
+        # Both Moscow airports: flying between them would be ridiculous.
+        legs = plan_multi_stop(["SVO", "DME"])
+        self.assertEqual(legs[0].profile, "highway")
+
+    def test_unknown_code_is_refused(self):
+        from iosloc.airports import plan_multi_stop
+
+        with self.assertRaises(ValueError):
+            plan_multi_stop(["SVO", "ZZZZ"])
+
+    def test_every_bundled_preset_can_be_planned(self):
+        """A preset that cannot be planned is a button that fails when pressed."""
+        from iosloc.airports import load_presets, plan_multi_stop
+
+        presets = load_presets()
+        self.assertGreater(len(presets), 5)
+        for preset in presets:
+            with self.subTest(preset=preset["id"]):
+                legs = plan_multi_stop(preset["stops"])
+                self.assertTrue(legs)
+                self.assertIn("ru", preset["name"])
+                self.assertIn("en", preset["name"])
+
     def test_force_flight_overrides_the_distance_rule(self):
         from iosloc.airports import plan_journey
 
@@ -673,7 +725,7 @@ class ServerShapeTests(unittest.TestCase):
             "/api/disconnect", "/api/teleport", "/api/route", "/api/steer",
             "/api/profile", "/api/speed", "/api/pause", "/api/resume",
             "/api/stop", "/api/search", "/api/snap", "/api/minimize",
-            "/api/reveal-devmode", "/",
+            "/api/reveal-devmode", "/api/log", "/",
         ):
             self.assertIn(path, paths, f"missing route {path}")
 
@@ -683,6 +735,7 @@ class ServerShapeTests(unittest.TestCase):
         for name in (
             "index.html", "app.css", "app.js",
             # Both map engines ship: raster works everywhere, vector needs WebGL.
+            "manifest.webmanifest",
             "vendor/leaflet.js", "vendor/leaflet.css",
             "vendor/maplibre-gl.js", "vendor/maplibre-gl.css",
             "map-styles/liberty.json", "map-styles/positron.json", "map-styles/dark.json",
@@ -729,6 +782,58 @@ class ServerShapeTests(unittest.TestCase):
         lan_branch = source.split("if lan:", 1)[1]
         self.assertIn('host = "0.0.0.0"', lan_branch)
         self.assertIn("generate_token()", lan_branch)
+
+
+class ConsoleTests(unittest.TestCase):
+    """The window has to say that it is running, whatever the terminal is."""
+
+    def test_banner_names_the_panel_and_the_log(self):
+        import io
+        import contextlib
+        from iosloc.console import print_banner
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            print_banner("http://127.0.0.1:8723/", 8723, "C:/x/ios-loc.log", "9.9.9")
+        text = buffer.getvalue()
+
+        self.assertIn("RUNNING", text)
+        self.assertIn("http://127.0.0.1:8723/", text)
+        self.assertIn("ios-loc.log", text)
+        self.assertIn("9.9.9", text)
+        # The reason the banner exists at all.
+        self.assertIn("Keep this window open", text)
+
+    def test_banner_survives_a_missing_log_path(self):
+        import io
+        import contextlib
+        from iosloc.console import print_banner
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            print_banner("http://127.0.0.1:8723/", 8723, None, "1.0")
+        self.assertIn("unavailable", buffer.getvalue())
+
+    def test_console_handler_only_echoes_our_own_records(self):
+        import logging
+        from iosloc.console import attach_console_log
+
+        root = logging.getLogger()
+        before = list(root.handlers)
+        try:
+            attach_console_log()
+            handler = root.handlers[-1]
+            ours = logging.LogRecord("iosloc.session", logging.INFO, "f", 1, "hi", None, None)
+            theirs = logging.LogRecord("urllib3", logging.INFO, "f", 1, "noise", None, None)
+            self.assertTrue(handler.filter(ours))
+            self.assertFalse(handler.filter(theirs))
+        finally:
+            root.handlers[:] = before
+
+    def test_setting_the_title_never_raises(self):
+        from iosloc.console import set_console_title
+
+        set_console_title("ios-loc test")
 
 
 class AccessTests(unittest.TestCase):

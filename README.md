@@ -138,6 +138,47 @@ profile takes over mid-route with its own acceleration.
 
 Rebuild the database with `tools/make_airports.py` to pick up new airports.
 
+### Ready-made routes
+
+Behind **Ready-made routes** in the journey block there is a list of prepared
+trips — Moscow → Frankfurt, Moscow → Dubai → Tokyo, Paris → Rome → Barcelona →
+Amsterdam, and so on. Press one and it is planned from wherever the device is
+now, with every leg driven, flown or walked as appropriate.
+
+Your own go in the same list: type airport codes separated by spaces —
+`SVO DXB NRT` — and press Add. Codes are checked against the database before
+saving, so a stored route always works. They persist between runs.
+
+Starting far from the first airport is handled sensibly: from Vladivostok a
+Moscow → Dubai route becomes *drive to VVO → fly VVO → SVO → fly SVO → DXB*,
+not a six-thousand-kilometre drive. Neighbouring airports are driven between
+rather than flown.
+
+### Knowing it is running
+
+Started by double-click, a program like this is a console window that prints a
+line and then goes quiet for hours — indistinguishable from one that is about
+to close. So it says what it is instead: the window names itself in the title
+bar and opens with a banner carrying the panel address, the port, the process
+id and the path to the log file, and from then on every connection, leg and
+dropout is echoed into it as it happens.
+
+The same log is in the panel, behind the sheet icon in the top right — useful
+when the panel is on a phone and the window is on a computer in another room.
+It follows the end of the file, colours warnings and errors, and turns its
+indicator red the moment the program stops answering.
+
+Three launchers ship beside the executable:
+
+| File | What it does |
+|---|---|
+| `start.cmd` | Starts the panel and keeps the window open, even after a crash |
+| `log.cmd` | Shows the log and follows it |
+| `start-lan.cmd` | Starts with phone access and prints the QR code |
+
+From a command line: `ios-loc.exe log -f` follows the log, `ios-loc.exe log -n 500`
+prints the last 500 lines.
+
 ### Maps
 
 Five styles on two engines, chosen in settings:
@@ -198,6 +239,13 @@ the panel, behind the phone icon. Scan it and the panel opens in the phone's
 browser.
 
 ![phone access](docs/screenshots/phone-access.jpg)
+
+**Install it on the phone.** Once the panel is open in the phone's browser,
+use Share → *Add to Home Screen*. It then launches from an icon, full screen,
+with no browser chrome — close enough to an app that the difference stops
+mattering. The layout is built for a phone at that size: the top bar collapses
+to one row, the readout becomes a thin strip, and the controls sit in a sheet
+over the map.
 
 **On security.** A normal run binds `127.0.0.1` only. `--lan` exposes the panel
 to the whole network — and the panel controls a phone's location — so in that
@@ -275,7 +323,7 @@ tools/
   make_map_styles.py fetches the vector map styles
   make_release.py    builds the distributable archive and verifies it
 tests/
-  test_core.py  78 tests
+  test_core.py  84 tests
 ```
 
 The path to the device differs by iOS version, and `device.py` hides it:

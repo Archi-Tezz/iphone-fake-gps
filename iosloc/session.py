@@ -420,6 +420,7 @@ class LocationSession:
                 if self._link is not None and self._override_active:
                     await self._link.clear()
                     self._override_active = False
+                    logger.info("override off; the real location is back")
                 self._last_fix = None
                 self._last_sent_fix = None
                 self._trail.clear()
@@ -708,6 +709,12 @@ class LocationSession:
                 return
 
         await self._link.set(fix.latitude, fix.longitude)
+        if not self._override_active:
+            # Logged on the transition only: a moving route sends fixes several
+            # times a second, and a line each would drown the window.
+            logger.info(
+                "override on at %.5f, %.5f", fix.latitude, fix.longitude
+            )
         self._override_active = True
         self._last_fix = fix
         self._last_sent_fix = fix

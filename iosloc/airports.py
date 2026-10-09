@@ -34,10 +34,13 @@ MIN_LEG_M = 200
 __all__ = [
     "Airport",
     "Leg",
+    "airport_by_code",
     "find_airports",
     "load_airports",
+    "load_presets",
     "nearest_airport",
     "plan_journey",
+    "plan_multi_stop",
 ]
 
 
@@ -64,6 +67,31 @@ class Airport:
             "city": self.city, "country": self.country, "cc": self.cc,
             "lat": self.lat, "lon": self.lon, "label": self.label,
         }
+
+
+PRESETS_FILE = Path(__file__).parent / "data" / "presets.json"
+
+
+@lru_cache(maxsize=1)
+def load_presets() -> tuple[dict[str, Any], ...]:
+    """Ready-made journeys shipped with the program.
+
+    Each entry is a chain of airport codes; the geometry is planned on demand,
+    so the file stays small and keeps working as the airport data is refreshed.
+    """
+    try:
+        rows = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()
+
+    usable = []
+    for row in rows:
+        stops = row.get("stops") or []
+        # Drop a preset whose airports are no longer in the database rather
+        # than offering a button that fails when pressed.
+        if all(airport_by_code(code) for code in stops) and len(stops) >= 2:
+            usable.append(row)
+    return tuple(usable)
 
 
 @lru_cache(maxsize=1)
@@ -171,6 +199,95 @@ def _ground_profile(metres: float) -> str:
     if metres < 40_000:
         return "city"
     return "highway"
+
+
+def airport_by_code(code: str) -> Optional[Airport]:
+    """Look an airport up by its IATA or ICAO code."""
+    needle = _fold(code.strip())
+    for airport in load_airports():
+        if _fold(airport.iata) == needle or _fold(airport.icao) == needle:
+            return airport
+    return None
+
+
+def plan_multi_stop(
+    stops: Sequence[str],
+    start: Optional[tuple[float, float]] = None,
+    finish: Optional[tuple[float, float]] = None,
+) -> list[Leg]:
+    """Plan a trip through a chain of airports.
+
+    `stops` are airport codes in travel order, e.g. ``["SVO", "DXB", "NRT"]``.
+    With `start` the trip begins on the ground, driving to the first airport;
+    with `finish` it ends the same way. Two airports close enough that flying
+    is absurd are joined by a ground leg instead.
+
+    :raises ValueError: if a code is unknown or fewer than two stops remain.
+    """
+    airports: list[Airport] = []
+    for code in stops:
+        airport = airport_by_code(code)
+        if airport is None:
+            raise ValueError(f"unknown airport code: {code}")
+        airports.append(airport)
+
+    if len(airports) < 1:
+        raise ValueError("a journey needs at least one airport")
+
+    legs: list[Leg] = []
+
+    if start is not None:
+        first = (airports[0].lat, airports[0].lon)
+        metres = distance(*start, *first)
+
+        if metres >= MIN_FLIGHT_DISTANCE_M:
+            # The chain starts on another continent. Driving there would be
+            # absurd, so get to the nearest airport and fly in.
+            local = nearest_airport(*start, exclude=(airports[0].iata,))
+            if local is not None:
+                local_point = (local.lat, local.lon)
+                to_local = distance(*start, *local_point)
+                if to_local >= MIN_LEG_M:
+                    legs.append(Leg(
+                        [start, local_point],
+                        "highway" if to_local >= FAR_AIRPORT_M else _ground_profile(to_local),
+                        f"Drive to {local.iata}",
+                    ))
+                legs.append(Leg(
+                    [local_point, first], "plane", f"Fly {local.iata} → {airports[0].iata}"
+                ))
+            else:
+                legs.append(Leg([start, first], "plane", f"Fly to {airports[0].iata}"))
+        elif metres >= MIN_LEG_M:
+            legs.append(Leg(
+                [start, first],
+                "highway" if metres >= FAR_AIRPORT_M else _ground_profile(metres),
+                f"Drive to {airports[0].iata}",
+            ))
+
+    for before, after in zip(airports, airports[1:]):
+        a = (before.lat, before.lon)
+        b = (after.lat, after.lon)
+        metres = distance(*a, *b)
+        if metres < MIN_FLIGHT_DISTANCE_M:
+            # Neighbouring airports: nobody flies, they drive.
+            legs.append(Leg([a, b], "highway", f"Drive {before.iata} → {after.iata}"))
+        else:
+            legs.append(Leg([a, b], "plane", f"Fly {before.iata} → {after.iata}"))
+
+    if finish is not None:
+        last = (airports[-1].lat, airports[-1].lon)
+        metres = distance(*last, *finish)
+        if metres >= MIN_LEG_M:
+            legs.append(Leg(
+                [last, finish],
+                "highway" if metres >= FAR_AIRPORT_M else _ground_profile(metres),
+                f"{'Drive' if metres >= 1_200 else 'Walk'} from {airports[-1].iata}",
+            ))
+
+    if not legs:
+        raise ValueError("a journey needs at least two distinct places")
+    return legs
 
 
 def plan_journey(

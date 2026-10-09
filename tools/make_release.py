@@ -24,6 +24,37 @@ DIST = ROOT / "dist" / "ios-loc"
 RELEASE = ROOT / "release"
 ARCHIVE = RELEASE / f"ios-loc-{__version__}-windows.zip"
 
+#: Double-clicking the .exe gives a console window that closes on any error --
+#: taking the error with it. These launchers hold the window open instead, so
+#: there is always something to read.
+START_CMD = """@echo off
+chcp 65001 >nul
+title ios-loc - zapusk
+echo Zapusk ios-loc. Ne zakryvayte eto okno: ono i est programma.
+echo.
+"%~dp0ios-loc.exe" ui
+echo.
+echo Programma zavershilas. Tekst vyshe - prichina.
+pause
+"""
+
+LOG_CMD = """@echo off
+chcp 65001 >nul
+title ios-loc - zhurnal
+"%~dp0ios-loc.exe" log -f -n 400
+pause
+"""
+
+LAN_CMD = """@echo off
+chcp 65001 >nul
+title ios-loc - dostup s telefona
+echo Panel otkroetsya v seti Wi-Fi. Otskaniruyte QR s telefona.
+echo.
+"%~dp0ios-loc.exe" ui --lan
+echo.
+pause
+"""
+
 READER_README = """ios-loc {version} — подмена геопозиции на iPhone по кабелю
 ================================================================
 
@@ -60,6 +91,16 @@ READER_README = """ios-loc {version} — подмена геопозиции н�
   3. Запустите ios-loc.exe — откроется панель в браузере.
   4. Нажмите «Подключить», выберите телефон.
   5. Кликните по карте — iPhone окажется там.
+
+  ЕСЛИ ОКНО ЗАКРЫВАЕТСЯ И НЕПОНЯТНО, РАБОТАЕТ ЛИ ПРОГРАММА
+  Запускайте через start.cmd вместо exe — окно останется открытым и покажет
+  причину, даже если программа упала. В самом окне теперь видно всё: адрес
+  панели, порт, номер процесса и путь к журналу, а ниже построчно идёт то,
+  что программа делает прямо сейчас. Заголовок окна тоже подписан.
+  log.cmd показывает журнал за всё время (и следит за новыми строками),
+  а в панели тот же журнал открывается кнопкой с листком в правом верхнем углу.
+  start-lan.cmd сразу открывает доступ с телефона с QR-кодом.
+
 
   Windows может показать синее окно «Защита Windows». Это потому, что
   программа не подписана сертификатом (он платный), а не потому, что с ней
@@ -140,6 +181,7 @@ READER_README = """ios-loc {version} — подмена геопозиции н�
 #: Files whose absence only surfaces later, as a crash in front of the user.
 REQUIRED_IN_BUILD = [
     "_internal/iosloc/static/index.html",
+    "_internal/iosloc/static/manifest.webmanifest",
     "_internal/iosloc/static/app.js",
     "_internal/iosloc/static/vendor/maplibre-gl.js",
     "_internal/iosloc/static/vendor/leaflet.js",
@@ -147,6 +189,7 @@ REQUIRED_IN_BUILD = [
     "_internal/iosloc/static/brand/ios-loc.ico",
     # Without it the journey planner silently falls back to ground routes.
     "_internal/iosloc/data/airports.json",
+    "_internal/iosloc/data/presets.json",
     # Loaded by ctypes, so no amount of import analysis finds it.
     "_internal/pytun_pmd3/wintun/bin/amd64/wintun.dll",
 ]
@@ -212,12 +255,22 @@ def main() -> None:
     )
     shutil.copy2(ROOT / "iosloc" / "static" / "brand" / "ios-loc.ico", DIST / "ios-loc.ico")
 
+    # CRLF: cmd.exe is the one program on Windows that still insists on it.
+    for name, body in (
+        ("start.cmd", START_CMD),
+        ("log.cmd", LOG_CMD),
+        ("start-lan.cmd", LAN_CMD),
+    ):
+        (DIST / name).write_bytes(body.replace("\n", "\r\n").encode("ascii"))
+
     print("== zip ==")
     RELEASE.mkdir(exist_ok=True)
     ARCHIVE.unlink(missing_ok=True)
     with zipfile.ZipFile(ARCHIVE, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(DIST.rglob("*")):
-            if path.is_file():
+            # The verify step runs the frozen build, which writes a log beside
+            # it; shipping that log would hand the recipient our machine's.
+            if path.is_file() and path.suffix != ".log":
                 archive.write(path, Path("ios-loc") / path.relative_to(DIST))
 
     size_mb = ARCHIVE.stat().st_size / 1024 / 1024

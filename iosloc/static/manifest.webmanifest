@@ -1,0 +1,17 @@
+{
+  "name": "ios-loc",
+  "short_name": "ios-loc",
+  "description": "Set an iPhone's location from a computer: pick a point, follow a route, plan a journey.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [
+    { "src": "brand/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "brand/icon-256.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "brand/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "brand/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ]
+}

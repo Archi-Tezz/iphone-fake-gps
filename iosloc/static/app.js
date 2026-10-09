@@ -1655,6 +1655,189 @@ function repeatLastRoute() {
   loadSavedRoute({ ...state.lastRoute, name: t("Repeat last") });
 }
 
+// ------------------------------------------------------------- activity log
+
+let logTimer = null;
+
+/** Show the log, and keep it live while the dialog is open. */
+async function openLog() {
+  $("log-backdrop").hidden = false;
+  await refreshLog();
+  // Polling only runs while the dialog is visible, so a closed log costs nothing.
+  if (logTimer) clearInterval(logTimer);
+  logTimer = setInterval(refreshLog, 2000);
+}
+
+function closeLog() {
+  $("log-backdrop").hidden = true;
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
+}
+
+function formatUptime(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h) return t("up {h} h {m} min", { h, m });
+  if (m) return t("up {m} min", { m });
+  return t("up {s} s", { s });
+}
+
+/** Colour a line by its level, so a problem stands out in a wall of text. */
+function logLineClass(line) {
+  if (/\b(ERROR|CRITICAL|Traceback)\b/.test(line)) return "log-line-err";
+  if (/\bWARNING\b/.test(line)) return "log-line-warn";
+  return "";
+}
+
+async function refreshLog() {
+  const view = $("log-view");
+  const dot = $("log-dot");
+  try {
+    const data = await api("/api/log?lines=400");
+    dot.classList.remove("bad");
+    $("log-state").textContent = t("Running");
+    $("log-uptime").textContent = data.uptime_s === undefined
+      ? ""
+      : `${formatUptime(data.uptime_s)} · PID ${data.pid}`;
+
+    if (!data.available) {
+      view.textContent = t("The log file has not been created yet.");
+      $("log-path").textContent = "";
+      return;
+    }
+
+    // Keep the view pinned to the end unless the user scrolled up to read.
+    const follow = $("log-follow").checked;
+    view.innerHTML = data.lines
+      .map((line) => {
+        const cls = logLineClass(line);
+        const text = escapeHtml(line);
+        return cls ? `<span class="${cls}">${text}</span>` : text;
+      })
+      .join("\n");
+    $("log-path").textContent = t("File: {path} ({size} KB)", {
+      path: data.path, size: data.size_kb,
+    });
+    if (follow) view.scrollTop = view.scrollHeight;
+  } catch (error) {
+    // A failed request is itself the answer: the program is no longer serving.
+    dot.classList.add("bad");
+    $("log-state").textContent = t("Not responding");
+    $("log-uptime").textContent = escapeHtml(error.message);
+  }
+}
+
+async function copyLog() {
+  try {
+    await navigator.clipboard.writeText($("log-view").textContent);
+    toast(t("Log copied."), "good", 2200);
+  } catch (error) {
+    toast(t("Could not copy: {error}", { error: error.message }), "bad");
+  }
+}
+
+// ------------------------------------------------------------------- presets
+
+const CUSTOM_PRESETS_KEY = "iosloc.presets";
+
+function loadCustomPresets() {
+  return readStored(CUSTOM_PRESETS_KEY, []);
+}
+
+function presetName(preset) {
+  // Built-in presets carry both languages; ones you add carry a plain string.
+  if (typeof preset.name === "string") return preset.name;
+  return preset.name[getLanguage()] || preset.name.en || preset.id;
+}
+
+async function openPresets() {
+  $("presets-backdrop").hidden = false;
+  const list = $("presets-list");
+  list.innerHTML = `<p class="muted">${t("Checking\u2026")}</p>`;
+  try {
+    const { presets } = await api("/api/presets");
+    renderPresets(presets, loadCustomPresets());
+  } catch (error) {
+    list.innerHTML = `<p class="device-warn">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderPresets(builtIn, custom) {
+  const list = $("presets-list");
+  list.innerHTML = "";
+
+  const addRow = (preset, removable) => {
+    const row = document.createElement("div");
+    row.className = "fav";
+    row.innerHTML = `<button class="fav-go" type="button">${escapeHtml(presetName(preset))}`
+      + ` <span class="muted">\u00b7 ${escapeHtml(preset.stops.join(" \u2192 "))}</span></button>`
+      + (removable ? `<button class="fav-del" type="button" aria-label="${t("Delete")}">&times;</button>` : "");
+    row.querySelector(".fav-go").addEventListener("click", () => usePreset(preset));
+    if (removable) {
+      row.querySelector(".fav-del").addEventListener("click", () => {
+        const kept = loadCustomPresets().filter((item) => item.id !== preset.id);
+        writeStored(CUSTOM_PRESETS_KEY, kept);
+        renderPresets(builtIn, kept);
+      });
+    }
+    list.append(row);
+  };
+
+  if (custom.length) {
+    const heading = document.createElement("p");
+    heading.className = "muted";
+    heading.style.cssText = "margin:4px 0 2px;font-size:12.5px";
+    heading.textContent = t("Your routes");
+    list.append(heading);
+    custom.forEach((preset) => addRow(preset, true));
+  }
+  builtIn.forEach((preset) => addRow(preset, false));
+}
+
+/** Plan a preset from wherever the device is now. */
+async function usePreset(preset) {
+  $("presets-backdrop").hidden = true;
+  const position = state.server && state.server.position;
+  const from = position
+    ? { lat: position.lat, lon: position.lon }
+    : (engine ? { lat: engine.getCenter()[0], lon: engine.getCenter()[1] } : null);
+
+  const box = $("journey-plan");
+  box.hidden = false;
+  box.innerHTML = `<p class="muted">${t("Planning\u2026")}</p>`;
+  try {
+    const plan = await api("/api/plan", { stops: preset.stops, start: from });
+    showPlan(plan);
+  } catch (error) {
+    box.innerHTML = `<p class="device-warn">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function addCustomPreset() {
+  const raw = $("preset-stops").value.trim();
+  const stops = raw.split(/[\s,;]+/).filter(Boolean).map((code) => code.toUpperCase());
+  if (stops.length < 2) {
+    toast(t("Need at least two airports."), "bad");
+    return;
+  }
+  // Check every code before saving, so a saved route always works.
+  for (const code of stops) {
+    const { airports } = await api(`/api/airports?q=${encodeURIComponent(code)}`);
+    if (!airports.some((a) => a.iata === code || a.icao === code)) {
+      toast(t("Unknown airport code: {code}", { code }), "bad", 6000);
+      return;
+    }
+  }
+
+  const custom = loadCustomPresets();
+  custom.unshift({ id: `custom-${Date.now()}`, name: stops.join(" \u2192 "), stops });
+  writeStored(CUSTOM_PRESETS_KEY, custom.slice(0, 30));
+  $("preset-stops").value = "";
+  toast(t("Route added."), "good", 2600);
+  const { presets } = await api("/api/presets");
+  renderPresets(presets, loadCustomPresets());
+}
+
 // ---------------------------------------------------------------- journey
 
 let plannedLegs = null;
@@ -1692,21 +1875,7 @@ async function planJourneyTo(destination) {
       start: from,
       finish: { lat: destination.lat, lon: destination.lon },
     });
-    plannedLegs = plan.legs;
-
-    const rows = plan.legs.map((leg) => `
-      <div class="leg">
-        <span class="leg-note">${escapeHtml(translateNote(leg.note))}</span>
-        <span class="leg-meta">${escapeHtml(t(profileLabel(leg.profile)))} · ${formatDistance(leg.length_m)}</span>
-      </div>`).join("");
-
-    box.innerHTML = rows
-      + `<p class="muted journey-total">${escapeHtml(t("Total: {distance}", { distance: formatDistance(plan.total_m) }))}</p>`
-      + `<button class="btn btn-accent btn-wide" id="journey-go">${escapeHtml(t("Start the journey"))}</button>`;
-    $("journey-go").addEventListener("click", startPlannedJourney);
-    renderDraft();  // a plan counts as something worth saving
-    // Show the whole trip, so the flight leg is obvious.
-    fitToPoints(plan.legs.flatMap((leg) => leg.points.map((p) => [p.lat, p.lon])));
+    showPlan(plan);
   } catch (error) {
     box.innerHTML = `<p class="device-warn">${escapeHtml(error.message)}</p>`;
   }
@@ -1727,6 +1896,24 @@ function translateNote(note) {
   const flight = note.match(/^Fly (\w+) → (\w+)$/);
   if (flight) return t("Fly {from} → {to}", { from: flight[1], to: flight[2] });
   return t(note);
+}
+
+/** Render a planned journey and offer to start it. */
+function showPlan(plan) {
+  plannedLegs = plan.legs;
+  const box = $("journey-plan");
+  box.hidden = false;
+  box.innerHTML = plan.legs.map((leg) => `
+      <div class="leg" style="border-left-color:${LEG_COLOURS[leg.profile] || LEG_COLOUR_DEFAULT}">
+        <span class="leg-note">${escapeHtml(translateNote(leg.note))}</span>
+        <span class="leg-meta">${escapeHtml(t(profileLabel(leg.profile)))} \u00b7 ${formatDistance(leg.length_m)}</span>
+      </div>`).join("")
+    + `<p class="muted journey-total">${escapeHtml(t("Total: {distance}", { distance: formatDistance(plan.total_m) }))}</p>`
+    + `<button class="btn btn-accent btn-wide" id="journey-go">${escapeHtml(t("Start the journey"))}</button>`;
+  $("journey-go").addEventListener("click", startPlannedJourney);
+  renderDraft();  // a plan counts as something worth saving
+  // Show the whole trip, so the flight legs are obvious.
+  fitToPoints(plan.legs.flatMap((leg) => leg.points.map((p) => [p.lat, p.lon])));
 }
 
 function profileLabel(key) {
@@ -2096,6 +2283,23 @@ function wire() {
   $("phone-backdrop").addEventListener("click", (event) => {
     if (event.target === $("phone-backdrop")) $("phone-backdrop").hidden = true;
   });
+  $("log-btn").addEventListener("click", openLog);
+  $("log-close").addEventListener("click", closeLog);
+  $("log-copy").addEventListener("click", copyLog);
+  $("log-backdrop").addEventListener("click", (event) => {
+    if (event.target === $("log-backdrop")) closeLog();
+  });
+
+  $("presets-btn").addEventListener("click", openPresets);
+  $("presets-close").addEventListener("click", () => { $("presets-backdrop").hidden = true; });
+  $("presets-backdrop").addEventListener("click", (event) => {
+    if (event.target === $("presets-backdrop")) $("presets-backdrop").hidden = true;
+  });
+  $("preset-add").addEventListener("click", addCustomPreset);
+  $("preset-stops").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); addCustomPreset(); }
+  });
+
   $("dest-btn").addEventListener("click", runDestinationSearch);
   $("dest-input").addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); runDestinationSearch(); }
@@ -2144,6 +2348,8 @@ function wire() {
     if (event.key !== "Escape") return;
     $("settings-backdrop").hidden = true;
     $("sheet-backdrop").hidden = true;
+    $("presets-backdrop").hidden = true;
+    closeLog();
   });
 }
 

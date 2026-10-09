@@ -1,0 +1,62 @@
+[
+  {
+    "id": "svo-fra",
+    "name": { "en": "Moscow → Frankfurt", "ru": "Москва → Франкфурт" },
+    "stops": ["SVO", "FRA"]
+  },
+  {
+    "id": "svo-ist",
+    "name": { "en": "Moscow → Istanbul", "ru": "Москва → Стамбул" },
+    "stops": ["SVO", "IST"]
+  },
+  {
+    "id": "svo-dxb",
+    "name": { "en": "Moscow → Dubai", "ru": "Москва → Дубай" },
+    "stops": ["SVO", "DXB"]
+  },
+  {
+    "id": "svo-dxb-nrt",
+    "name": { "en": "Moscow → Dubai → Tokyo", "ru": "Москва → Дубай → Токио" },
+    "stops": ["SVO", "DXB", "NRT"]
+  },
+  {
+    "id": "svo-ist-jfk",
+    "name": { "en": "Moscow → Istanbul → New York", "ru": "Москва → Стамбул → Нью-Йорк" },
+    "stops": ["SVO", "IST", "JFK"]
+  },
+  {
+    "id": "svo-pek",
+    "name": { "en": "Moscow → Beijing", "ru": "Москва → Пекин" },
+    "stops": ["SVO", "PEK"]
+  },
+  {
+    "id": "led-svo",
+    "name": { "en": "St Petersburg → Moscow", "ru": "Санкт-Петербург → Москва" },
+    "stops": ["LED", "SVO"]
+  },
+  {
+    "id": "lhr-jfk",
+    "name": { "en": "London → New York", "ru": "Лондон → Нью-Йорк" },
+    "stops": ["LHR", "JFK"]
+  },
+  {
+    "id": "cdg-nrt",
+    "name": { "en": "Paris → Tokyo", "ru": "Париж → Токио" },
+    "stops": ["CDG", "NRT"]
+  },
+  {
+    "id": "dxb-syd",
+    "name": { "en": "Dubai → Sydney", "ru": "Дубай → Сидней" },
+    "stops": ["DXB", "SYD"]
+  },
+  {
+    "id": "world-east",
+    "name": { "en": "Round the world: Moscow → Dubai → Tokyo → Los Angeles", "ru": "Вокруг света: Москва → Дубай → Токио → Лос-Анджелес" },
+    "stops": ["SVO", "DXB", "NRT", "LAX"]
+  },
+  {
+    "id": "europe-tour",
+    "name": { "en": "Europe tour: Paris → Rome → Barcelona → Amsterdam", "ru": "По Европе: Париж → Рим → Барселона → Амстердам" },
+    "stops": ["CDG", "FCO", "BCN", "AMS"]
+  }
+]

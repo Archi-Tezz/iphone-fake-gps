@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import sys
+import time
 import traceback
 import webbrowser
+from collections import deque
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Optional
@@ -31,6 +34,10 @@ from . import errors
 from .i18n import t
 from .profiles import PROFILES
 from .session import LocationSession
+
+#: When this process started serving, so the panel can show an uptime and
+#: the user has a positive answer to "is it actually running?".
+_STARTED = time.monotonic()
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +293,37 @@ async def api_phone_qr():
     return Response(content=png, media_type="image/png")
 
 
+@app.get("/api/log")
+async def api_log(lines: int = 200) -> dict[str, Any]:
+    """The tail of the log file, so the panel can show it without a text editor.
+
+    The panel is often the only window the user has -- especially on a phone --
+    and "is it still running, and what is it doing?" should be answerable there.
+    """
+    from .logsetup import current_log_path
+
+    path = current_log_path()
+    if path is None or not path.exists():
+        return {"available": False, "path": None, "lines": []}
+
+    lines = max(10, min(lines, 2000))
+    try:
+        # Read the tail only: the file rotates at 2 MB and the panel wants the end.
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            tail = deque(handle, maxlen=lines)
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "available": True,
+        "path": str(path),
+        "lines": [line.rstrip() for line in tail],
+        "size_kb": path.stat().st_size // 1024,
+        "uptime_s": round(time.monotonic() - _STARTED, 1),
+        "pid": os.getpid(),
+    }
+
+
 @app.post("/api/minimize")
 async def api_minimize() -> dict[str, Any]:
     """Hide the console window; the tray icon stays as the way back."""
@@ -325,13 +363,28 @@ async def api_route(request: RouteRequest) -> dict[str, Any]:
 
 
 class JourneyRequest(BaseModel):
-    """Either explicit legs, or two points to plan between."""
+    """Explicit legs, a chain of airport stops, or two points to plan between."""
 
     legs: Optional[list[dict[str, Any]]] = None
+    stops: Optional[list[str]] = None
     start: Optional[Point] = None
     finish: Optional[Point] = None
     force_flight: Optional[bool] = None
     from_current: bool = True
+
+
+def _plan_from_request(request: "JourneyRequest"):
+    """Turn whatever the request described into a list of legs."""
+    from .airports import plan_journey, plan_multi_stop
+
+    start = (request.start.lat, request.start.lon) if request.start else None
+    finish = (request.finish.lat, request.finish.lon) if request.finish else None
+
+    if request.stops:
+        return plan_multi_stop(request.stops, start=start, finish=finish)
+    if start is None or finish is None:
+        raise ValueError("either stops, or start and finish, are required")
+    return plan_journey(start, finish, force_flight=request.force_flight)
 
 
 @app.get("/api/airports")
@@ -348,19 +401,28 @@ async def api_airports(q: str = "", lat: Optional[float] = None,
     return {"airports": []}
 
 
+@app.get("/api/presets")
+async def api_presets() -> dict[str, Any]:
+    """Ready-made journeys, with their airports resolved for display."""
+    from .airports import airport_by_code, load_presets
+
+    presets = []
+    for preset in load_presets():
+        airports = [airport_by_code(code) for code in preset["stops"]]
+        presets.append({
+            "id": preset["id"],
+            "name": preset.get("name", {}),
+            "stops": preset["stops"],
+            "cities": [a.city for a in airports if a],
+        })
+    return {"presets": presets}
+
+
 @app.post("/api/plan")
 async def api_plan(request: JourneyRequest) -> dict[str, Any]:
     """Plan a journey without starting it, so the UI can show it first."""
     async def work():
-        from .airports import plan_journey
-
-        if request.start is None or request.finish is None:
-            raise ValueError("start and finish are required")
-        legs = plan_journey(
-            (request.start.lat, request.start.lon),
-            (request.finish.lat, request.finish.lon),
-            force_flight=request.force_flight,
-        )
+        legs = _plan_from_request(request)
         return {
             "legs": [leg.as_dict() for leg in legs],
             "total_m": round(sum(leg.length for leg in legs), 1),
@@ -373,17 +435,9 @@ async def api_plan(request: JourneyRequest) -> dict[str, Any]:
 async def api_journey(request: JourneyRequest) -> dict[str, Any]:
     """Start a multi-leg journey, planning it first when only endpoints are given."""
     async def work():
-        from .airports import plan_journey
-
         legs = request.legs
         if not legs:
-            if request.start is None or request.finish is None:
-                raise ValueError("either legs, or start and finish, are required")
-            planned = plan_journey(
-                (request.start.lat, request.start.lon),
-                (request.finish.lat, request.finish.lon),
-                force_flight=request.force_flight,
-            )
+            planned = _plan_from_request(request)
             legs = [
                 {"points": [[p[0], p[1]] for p in leg.points],
                  "profile": leg.profile, "note": leg.note}
@@ -551,10 +605,28 @@ async def api_snap(request: SnapRequest) -> dict[str, Any]:
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class FreshStaticFiles(StaticFiles):
+    """Serve the panel without browser caching.
+
+    The panel ships inside the program, so a new version means new files on
+    disk -- but the browser would keep showing the old ones until a hard
+    reload. For a local server the bandwidth saved is irrelevant; being sure
+    the user sees the version they installed is not.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+app.mount("/static", FreshStaticFiles(directory=STATIC_DIR), name="static")
 
 
 DEFAULT_PORT = 8723
@@ -652,6 +724,7 @@ def serve(
     server_port = chosen
     url = f"http://127.0.0.1:{chosen}/"
     host = "127.0.0.1"
+    lan_lines: list[str] = []
 
     if lan:
         # Reachable from the network means reachable by everyone on it, so the
@@ -662,25 +735,38 @@ def serve(
         host = "0.0.0.0"
         url = f"http://127.0.0.1:{chosen}/?k={access_token}"
         address = primary_address()
-        print(f"ios-loc: control panel → {url}", flush=True)
+        # Collected rather than printed: the banner goes first, so the window
+        # leads with "running" instead of with a QR code.
         if address:
             phone_url = f"http://{address}:{chosen}/?k={access_token}"
-            print("\nOpen on your phone (same Wi-Fi):", flush=True)
-            print(f"    {phone_url}", flush=True)
+            lan_lines += ["Open on your phone (same Wi-Fi):", f"    {phone_url}"]
             code = qr_ascii(phone_url)
             if code:
-                print(code, flush=True)
-            print(f"Access code: {access_token}", flush=True)
+                lan_lines.append(code)
+            lan_lines.append(f"Access code: {access_token}")
         else:
-            print("Could not determine the local network address — check your connection.",
-                  flush=True)
-        print("The panel is now open to your local network. Nothing gets in without the\n"
-              "access code, but do not use this mode on a public or untrusted network.\n",
-              flush=True)
-    else:
-        print(f"ios-loc: control panel → {url}", flush=True)
+            lan_lines.append(
+                "Could not determine the local network address — check your connection."
+            )
+        lan_lines += [
+            "",
+            "The panel is now open to your local network. Nothing gets in without",
+            "the access code, but do not use this mode on an untrusted network.",
+            "",
+        ]
 
-    print("Stop with Ctrl+C — the real location is restored automatically", flush=True)
+    from . import __version__
+    from .console import attach_console_log, print_banner, set_console_title
+    from .logsetup import current_log_path
+
+    # Until the panel opens in a browser, this window is the only evidence the
+    # program exists -- so it says so, plainly, and then keeps talking.
+    print_banner(url, chosen, current_log_path(), __version__)
+    set_console_title(f"ios-loc {__version__} — running on port {chosen}")
+    attach_console_log(verbose=log_level == "info")
+    for row in lan_lines:
+        print(row, flush=True)
+
     if open_browser:
         _open_later(url)
 

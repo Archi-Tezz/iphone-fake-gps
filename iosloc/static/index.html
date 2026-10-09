@@ -7,7 +7,14 @@
 <link rel="icon" href="/static/brand/ios-loc.ico" sizes="any">
 <link rel="icon" type="image/png" href="/static/brand/icon-64.png">
 <link rel="apple-touch-icon" href="/static/brand/icon-180.png">
-<meta name="theme-color" content="#0a84ff">
+<meta name="theme-color" content="#0b0d12">
+<!-- Added to the home screen the panel opens without Safari's chrome, which is
+     what makes it feel like an app rather than a bookmark. -->
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ios-loc">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -37,6 +44,10 @@
     <button class="btn btn-ghost icon-only" id="minimize-btn"
             data-i18n-attr="title:Minimise to tray;aria-label:Minimise to tray">
       <svg viewBox="0 0 24 24"><path d="M5 19h14"/><path d="M12 4v10m0 0-4-4m4 4 4-4"/></svg>
+    </button>
+    <button class="btn btn-ghost icon-only" id="log-btn"
+            data-i18n-attr="title:Activity log;aria-label:Activity log">
+      <svg viewBox="0 0 24 24"><path d="M5 4.5h14v15H5z"/><path d="M8 9h8M8 12.5h8M8 16h5"/></svg>
     </button>
     <button class="btn btn-ghost icon-only" id="settings-btn"
             data-i18n-attr="title:Settings;aria-label:Settings">
@@ -129,6 +140,9 @@
       <button class="btn btn-ghost btn-sm" id="dest-btn" data-i18n="Plan">Plan</button>
     </div>
     <div id="dest-results" class="results" hidden></div>
+    <div class="row">
+      <button class="btn btn-ghost btn-sm" id="presets-btn" data-i18n="Ready-made routes">Ready-made routes</button>
+    </div>
     <div id="journey-plan" hidden></div>
   </section>
 
@@ -328,6 +342,64 @@
     <div id="phone-body"></div>
     <div class="row end">
       <button class="btn btn-primary" id="phone-close" data-i18n="Close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ready-made routes ------------------------------------------------------ -->
+<div class="sheet-backdrop" id="presets-backdrop" hidden>
+  <div class="glass sheet" role="dialog" aria-modal="true">
+    <h2 data-i18n="Ready-made routes">Ready-made routes</h2>
+    <p class="hint" data-i18n="Pick one and it is planned from where the device is now. Legs are driven, flown and walked with the right profile for each.">
+      Pick one and it is planned from where the device is now. Legs are driven,
+      flown and walked with the right profile for each.
+    </p>
+    <div id="presets-list" class="device-list"></div>
+
+    <div class="setting">
+      <span class="setting-label" data-i18n="Build your own">Build your own</span>
+      <div class="search-row">
+        <input id="preset-stops" type="search" autocomplete="off" spellcheck="false"
+               data-i18n-attr="placeholder:Airport codes, e.g. SVO DXB NRT">
+        <button class="btn btn-ghost btn-sm" id="preset-add" data-i18n="Add">Add</button>
+      </div>
+      <p class="hint" data-i18n="Separate codes with spaces or commas. Saved routes appear in this list and survive restarts.">
+        Separate codes with spaces or commas. Saved routes appear in this list and
+        survive restarts.
+      </p>
+    </div>
+
+    <div class="row end">
+      <button class="btn btn-primary" id="presets-close" data-i18n="Close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Activity log ----------------------------------------------------------- -->
+<div class="sheet-backdrop" id="log-backdrop" hidden>
+  <div class="glass sheet sheet-wide" role="dialog" aria-modal="true">
+    <h2 data-i18n="Activity log">Activity log</h2>
+    <p class="hint" data-i18n="Everything the program does, newest at the bottom. If this panel answers, the program is running.">
+      Everything the program does, newest at the bottom. If this panel answers,
+      the program is running.
+    </p>
+
+    <div class="log-status">
+      <span class="log-dot" id="log-dot"></span>
+      <span id="log-state" data-i18n="Running">Running</span>
+      <span class="muted" id="log-uptime"></span>
+    </div>
+
+    <pre class="log-view" id="log-view"></pre>
+    <p class="hint" id="log-path"></p>
+
+    <div class="row end">
+      <label class="toggle">
+        <input type="checkbox" id="log-follow" checked>
+        <span data-i18n="Follow">Follow</span>
+      </label>
+      <button class="btn btn-ghost" id="log-copy" data-i18n="Copy">Copy</button>
+      <button class="btn btn-primary" id="log-close" data-i18n="Close">Close</button>
     </div>
   </div>
 </div>
